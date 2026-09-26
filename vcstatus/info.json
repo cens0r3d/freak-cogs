@@ -1,0 +1,16 @@
+{
+    "author": ["Hermes Agent"],
+    "description": "Automatically set configurable status messages on voice channels when members join or leave. Supports per-channel messages, {count} placeholder for live member count, per-guild configuration.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not store any end user data. All settings are guild-specific and stored in Red's Config.",
+    "hidden": false,
+    "install_msg": "Thanks for installing VCStatus! Use `[p]vcstatus` to configure the feature. Requires the bot to have **Manage Channels** permission on voice channels.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [3, 8, 0],
+    "permissions": ["manage_channels"],
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Auto voice channel status on join",
+    "tags": ["voice", "status", "auto-status", "utility", "join"],
+    "type": "COG"
+}
