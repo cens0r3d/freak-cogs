@@ -1,0 +1,24 @@
+{
+    "author": [
+        "YourName"
+    ],
+    "install_msg": "Thank you for installing KickAlerts!\nFirst set your API credentials: `[p]kickalert setcreds <client_id> <client_secret>`\nThen: `[p]kickalert setchannel #channel` and `[p]kickalert add <username>`\nGet your credentials at https://kick.com/settings/developer",
+    "name": "KickAlerts",
+    "short": "Kick.com livestream announcements using the official Kick API v2.",
+    "description": "Monitor Kick.com streamers using the official Kick API v2 with OAuth2 authentication. Get live notifications with beautiful embeds, viewer counts, categories, and more.",
+    "end_user_data_statement": "This cog stores guild-level configuration including channel IDs, role IDs, and Kick.com streamer usernames. API credentials are stored encrypted via Red's built-in token storage.",
+    "requirements": [
+        "aiohttp"
+    ],
+    "tags": [
+        "kick",
+        "livestream",
+        "notification",
+        "alert",
+        "streaming"
+    ],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
