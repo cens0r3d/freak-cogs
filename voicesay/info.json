@@ -4,6 +4,7 @@
     "name": "VoiceSay",
     "short": "Send native Discord voice messages.",
     "description": "Send attached audio files as native Discord voice messages to text channels or DMs.",
+    "end_user_data_statement": "This cog does not store any end user data. Audio attachments are relayed to the destination you choose and are not retained.",
     "tags": ["voice", "audio", "message", "vm"],
     "requirements": [],
     "hidden": false,
