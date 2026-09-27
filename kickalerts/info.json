@@ -1,6 +1,6 @@
 {
     "author": [
-        "YourName"
+        "cens0r3d"
     ],
     "install_msg": "Thank you for installing KickAlerts!\nFirst set your API credentials: `[p]kickalert setcreds <client_id> <client_secret>`\nThen: `[p]kickalert setchannel #channel` and `[p]kickalert add <username>`\nGet your credentials at https://kick.com/settings/developer",
     "name": "KickAlerts",

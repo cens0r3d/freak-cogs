@@ -1,5 +1,5 @@
 {
-    "author": ["drangsi"],
+    "author": ["cens0r3d"],
     "install_msg": "VoiceSay installed. Use `[p]voicesay <channel|user>` with an audio attachment to send a native voice message.",
     "name": "VoiceSay",
     "short": "Send native Discord voice messages.",
