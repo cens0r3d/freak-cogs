@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts
+[p]load vcstatus kickalerts voicesay
 ```
 
 Or install one at a time:
@@ -15,6 +15,7 @@ Or install one at a time:
 ```
 [p]cog install freak-cogs vcstatus
 [p]cog install freak-cogs kickalerts
+[p]cog install freak-cogs voicesay
 ```
 
 ## Cogs
@@ -73,6 +74,28 @@ Grab API credentials at https://kick.com/settings/developer.
 There's more: `removerole`, `interval`, `style`, `autodelete`, `timezone`, `toggleviewers`, `togglecategory`, `test`, `check`, `debug`, `settings`, `clear`, `force`. See `[p]help kickalert`.
 
 Requires `aiohttp`, which `[p]cog install` handles.
+
+### voicesay
+
+Sends an attached audio file as a native Discord voice message, to a text channel or a DM.
+
+```
+[p]voicesay #channel    (with audio attached)
+[p]voicesay @user       (with audio attached)
+[p]voicesay 123456789   (raw channel or user ID)
+```
+
+Optional text after the destination becomes the message body:
+
+```
+[p]voicesay #general listen to this
+```
+
+Notes:
+
+- Only the first attachment is used, and it has to be `audio/*`.
+- Discord voice messages must be OGG Opus. Other formats get converted with **ffmpeg**, so ffmpeg should be on the host — without it you can still send `.ogg`/`.opus` files directly.
+- The waveform preview also comes from ffmpeg; a placeholder is used if it's missing.
 
 ## Requirements
 
