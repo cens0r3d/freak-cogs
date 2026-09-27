@@ -1,0 +1,11 @@
+{
+    "author": ["drangsi"],
+    "install_msg": "VoiceSay installed. Use `[p]voicesay <channel|user>` with an audio attachment to send a native voice message.",
+    "name": "VoiceSay",
+    "short": "Send native Discord voice messages.",
+    "description": "Send attached audio files as native Discord voice messages to text channels or DMs.",
+    "tags": ["voice", "audio", "message", "vm"],
+    "requirements": [],
+    "hidden": false,
+    "disabled": false
+}
