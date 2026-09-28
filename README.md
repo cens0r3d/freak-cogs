@@ -114,11 +114,7 @@ Red-DiscordBot 3.5.0+ and discord.py 2.x.
 
 ## Credits
 
-- **vcstatus** — written for this repo.
-- **voicesay** — originally authored by `drangsi`.
-- **kickalerts** — originally generated from a spec; its author field was the placeholder `YourName`.
-
-If you are an original author and want the attribution corrected, please open an issue.
+- **cens0r3d** — author of every cog in this repository.
 
 ## License
 
