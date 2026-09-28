@@ -30,6 +30,7 @@ Puts a configurable status line on voice channels. Updates whenever someone join
 | `[p]vcstatus default <text>` | Default status for every voice channel |
 | `[p]vcstatus channel <#channel> <text>` | Status for one specific channel |
 | `[p]vcstatus remove [#channel]` | Drop a channel override, or reset everything |
+| `[p]vcstatus empty` | Toggle: clear the status while a channel is empty |
 | `[p]vcstatus resync` | Force a re-push to every voice channel |
 | `[p]vcstatus show` | Show the current config |
 
@@ -43,9 +44,10 @@ Example:
 
 Notes:
 
-- Only runs if the bot has **Manage Channels** on the channel.
+- Needs the **Set Voice Channel Status** permission, plus **Manage Channels** while the bot is not connected to that channel.
 - Messages are capped at 500 characters (Discord's limit).
 - `{count}` counts humans only, bots are ignored.
+- `[p]vcstatus empty` decides what an empty channel shows: a cleared status, or the message with a count of 0.
 - Updates are debounced (~2 s), so a burst of joins/leaves becomes one request per channel — the status route is rate limited.
 - If a status ever looks stale, `[p]vcstatus resync` re-pushes everything without touching your config.
 

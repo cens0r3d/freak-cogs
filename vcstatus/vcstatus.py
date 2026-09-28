@@ -1,12 +1,15 @@
 """VCStatus — Automatic voice channel status on member join.
 
-Two facts shape this cog:
+Facts this cog is built around:
 
-1. Discord has no endpoint to *read* a voice channel status back, and
-   discord.py exposes no ``voice_status`` attribute.  So once the bot has set a
-   status, its own cache is the only record of it.
-2. The voice-status route is rate limited per route, so a burst of
-   joins/leaves/moves must be coalesced instead of firing one request each.
+* The status route is ``PUT /channels/{id}/voice-status`` and its ``status``
+  field is nullable, so ``null`` clears the status.  discord.py has no
+  ``voice_status`` attribute and Discord offers no way to *read* a status back,
+  so the bot's own cache is the only record of what it set.
+* The route is rate limited per route, so a burst of joins/leaves/moves is
+  coalesced instead of firing one request each.
+* It needs ``SET_VOICE_CHANNEL_STATUS``, plus ``MANAGE_CHANNELS`` while the bot
+  is not connected to the channel.
 """
 
 import asyncio
@@ -27,12 +30,16 @@ DEBOUNCE_SECONDS = 2.0
 # Spacing between requests when re-pushing every channel at once.
 BULK_DELAY_SECONDS = 0.25
 
+# Distinguishes "we never set anything here" from "we set it to nothing".
+UNKNOWN = object()
+
 
 class VCStatus(commands.Cog):
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
-        # Last status we successfully pushed, per channel id.
+        # Last status we successfully pushed, per channel id.  A value of None
+        # means "pushed a clear".
         self._status_cache: dict[int, Optional[str]] = {}
         # In-flight debounce tasks, per channel id.
         self._pending: dict[int, asyncio.Task] = {}
@@ -42,6 +49,7 @@ class VCStatus(commands.Cog):
         self.config.register_guild(
             enabled=False,
             default_message="{count} connected",
+            clear_when_empty=False,
             channels={},
         )
 
@@ -75,6 +83,29 @@ class VCStatus(commands.Cog):
 
         if new_state:
             await self._apply_status_to_all(ctx.guild)
+
+    @vcstatus.command(name="empty", aliases=["clearempty"])
+    async def toggle_empty(self, ctx: commands.Context) -> None:
+        """Toggle clearing the status while a voice channel is empty.
+
+        Enabled: a channel with nobody in it gets no status at all.
+        Disabled: it shows the configured message with a count of 0.
+        """
+        current = await self.config.guild(ctx.guild).clear_when_empty()
+        new_state = not current
+        await self.config.guild(ctx.guild).clear_when_empty.set(new_state)
+
+        await ctx.send(
+            "Empty voice channels will now "
+            + (
+                "have their status cleared."
+                if new_state
+                else "keep showing the message."
+            )
+        )
+
+        if await self.config.guild(ctx.guild).enabled():
+            await self._apply_status_to_all(ctx.guild, force=True)
 
     @vcstatus.command(name="resync")
     async def resync(self, ctx: commands.Context) -> None:
@@ -160,6 +191,7 @@ class VCStatus(commands.Cog):
                     await ctx.send(f"No override for {channel.mention}.")
         else:
             await self.config.guild(ctx.guild).default_message.set("{count} connected")
+            await self.config.guild(ctx.guild).clear_when_empty.set(False)
             await self.config.guild(ctx.guild).enabled.set(False)
             await self.config.guild(ctx.guild).channels.set({})
             self._status_cache.clear()
@@ -173,6 +205,8 @@ class VCStatus(commands.Cog):
         lines = [
             f"**Status:** {'Enabled' if cfg['enabled'] else 'Disabled'}",
             f"**Default:** {inline(cfg['default_message'])}",
+            f"**Empty channels:** "
+            f"{'cleared' if cfg['clear_when_empty'] else 'keep the message'}",
         ]
 
         if cfg["channels"]:
@@ -253,9 +287,14 @@ class VCStatus(commands.Cog):
         if not cfg["enabled"]:
             return
 
-        msg = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
         count = sum(1 for m in channel.members if not m.bot)
-        resolved = msg.replace("{count}", str(count))
+
+        # ``status`` is nullable on this route: null clears the status.
+        if count == 0 and cfg["clear_when_empty"]:
+            resolved: Optional[str] = None
+        else:
+            msg = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
+            resolved = msg.replace("{count}", str(count))
 
         if not channel.permissions_for(guild.me).manage_channels:
             log.debug(
@@ -263,7 +302,8 @@ class VCStatus(commands.Cog):
             )
             return
 
-        if self._status_cache.get(channel.id) == resolved:
+        cached = self._status_cache.get(channel.id, UNKNOWN)
+        if cached is not UNKNOWN and cached == resolved:
             log.debug(
                 "Status for %s (%s) already %r", channel.name, channel.id, resolved
             )
@@ -294,11 +334,13 @@ class VCStatus(commands.Cog):
                 await asyncio.sleep(BULK_DELAY_SECONDS)
             await self._update_status(channel)
 
-    async def _set_vc_status(self, channel: discord.VoiceChannel, status: str) -> bool:
-        """Push a voice channel status via the dedicated endpoint.
+    async def _set_vc_status(
+        self, channel: discord.VoiceChannel, status: Optional[str]
+    ) -> bool:
+        """Push (or clear) a voice channel status via its dedicated endpoint.
 
         ``channel.edit(voice_status=...)`` does not exist in discord.py; the
-        status has its own route and expects PUT.
+        status has its own route and expects PUT.  Passing ``None`` clears it.
 
         Never raises: a failure here must not abort the caller, otherwise a
         failed update on one channel would silently skip the other channel of
@@ -312,13 +354,22 @@ class VCStatus(commands.Cog):
         try:
             await self.bot.http.request(route, json={"status": status})
         except discord.HTTPException as exc:
-            log.warning(
-                "Could not set voice status in %s (%s): HTTP %s %s",
-                channel.name,
-                channel.id,
-                exc.status,
-                exc.text,
-            )
+            if exc.status == 403:
+                log.warning(
+                    "Could not set voice status in %s (%s): HTTP 403. The bot "
+                    "needs SET_VOICE_CHANNEL_STATUS, plus MANAGE_CHANNELS while "
+                    "it is not connected to that channel.",
+                    channel.name,
+                    channel.id,
+                )
+            else:
+                log.warning(
+                    "Could not set voice status in %s (%s): HTTP %s %s",
+                    channel.name,
+                    channel.id,
+                    exc.status,
+                    exc.text,
+                )
             return False
         except Exception:
             log.exception(
