@@ -20,7 +20,7 @@ class KickAlerts(commands.Cog):
     """Monitor Kick.com streamers using the official Kick API v2."""
 
     __version__ = "2.0.0"
-    __author__ = "YourName"
+    __author__ = "cens0r3d"
 
     def __init__(self, bot: Red):
         self.bot = bot
