@@ -115,6 +115,7 @@ Red-DiscordBot 3.5.0+ and discord.py 2.x.
 ## Credits
 
 - **cens0r3d** — author of every cog in this repository.
+- **DeepSeek** (`deepseek-v4.1-flash`) — pair-programmed the cogs.
 
 ## License
 
