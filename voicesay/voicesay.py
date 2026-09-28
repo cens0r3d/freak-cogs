@@ -9,7 +9,7 @@ from typing import Optional, Union
 import discord
 from redbot.core import commands
 
-log = logging.getLogger("red.voicesay")
+log = logging.getLogger("red.freak_cogs.voicesay")
 
 
 class VoiceSay(commands.Cog):
