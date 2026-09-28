@@ -119,3 +119,7 @@ Red-DiscordBot 3.5.0+ and discord.py 2.x.
 - **kickalerts** — originally generated from a spec; its author field was the placeholder `YourName`.
 
 If you are an original author and want the attribution corrected, please open an issue.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
