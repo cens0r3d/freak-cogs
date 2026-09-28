@@ -1,6 +1,6 @@
 {
     "author": ["cens0r3d"],
-    "install_msg": "VoiceSay installed. Use `[p]voicesay <channel|user>` with an audio attachment to send a native voice message.",
+    "install_msg": "VoiceSay installed. Use `[p]voicesay <channel|user>` with an audio attachment to send a native voice message.\n\nSetup: Discord voice messages must be OGG Opus. To send other formats the host needs **ffmpeg** and **ffprobe** installed; without them only .ogg/.opus attachments work.\n\nData: this cog does not store any data.",
     "name": "VoiceSay",
     "short": "Send native Discord voice messages.",
     "description": "Send attached audio files as native Discord voice messages to text channels or DMs.",

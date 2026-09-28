@@ -1,0 +1,5 @@
+{
+    "author": ["cens0r3d"],
+    "short": "A small collection of Red-DiscordBot cogs.",
+    "description": "Red-DiscordBot cogs by cens0r3d: vcstatus keeps voice channel statuses in sync with member counts, kickalerts posts Kick.com livestream announcements, and voicesay sends audio attachments as native Discord voice messages."
+}

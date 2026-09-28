@@ -8,7 +8,7 @@ import discord
 from redbot.core import commands, Config, checks
 from redbot.core.bot import Red
 
-log = logging.getLogger("red.kickalerts")
+log = logging.getLogger("red.freak_cogs.kickalerts")
 
 KICK_AUTH_URL = "https://id.kick.com/oauth/token"
 KICK_API_BASE = "https://api.kick.com/public/v2"

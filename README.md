@@ -102,6 +102,20 @@ Notes:
 - Discord voice messages must be OGG Opus. Other formats get converted with **ffmpeg**, so ffmpeg should be on the host — without it you can still send `.ogg`/`.opus` files directly.
 - The waveform preview also comes from ffmpeg; a placeholder is used if it's missing.
 
+## Extra setup
+
+- **vcstatus** — the bot needs the **Set Voice Channel Status** permission, plus **Manage Channels** while it is not connected to that channel.
+- **kickalerts** — needs OAuth2 client credentials from https://kick.com/settings/developer. Store them with `[p]kickalert setcreds <client_id> <client_secret>` and verify with `[p]kickalert authstatus`.
+- **voicesay** — needs **ffmpeg** and **ffprobe** on the host to convert audio that is not already OGG Opus.
+
 ## Requirements
 
 Red-DiscordBot 3.5.0+ and discord.py 2.x.
+
+## Credits
+
+- **vcstatus** — written for this repo.
+- **voicesay** — originally authored by `drangsi`.
+- **kickalerts** — originally generated from a spec; its author field was the placeholder `YourName`.
+
+If you are an original author and want the attribution corrected, please open an issue.

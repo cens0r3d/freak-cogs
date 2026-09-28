@@ -22,7 +22,7 @@ from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import bold, inline
 
-log = logging.getLogger("red.vcstatus")
+log = logging.getLogger("red.freak_cogs.vcstatus")
 
 # Wait this long for further changes before pushing an update.  Coalesces
 # bursts and lets the voice state settle first.
@@ -37,6 +37,11 @@ _MODES = ("on", "off", "reset")
 
 
 class VCStatus(commands.Cog):
+    """Keep voice channel statuses in sync with the member count.
+
+    Supports per-channel messages, a ``{count}`` placeholder, and optionally
+    clearing the status while a channel is empty.
+    """
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot

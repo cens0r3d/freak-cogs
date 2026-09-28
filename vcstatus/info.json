@@ -5,7 +5,7 @@
     "disabled": false,
     "end_user_data_statement": "This cog does not store any end user data. All settings are guild-specific and stored in Red's Config.",
     "hidden": false,
-    "install_msg": "Thanks for installing VCStatus! Use `[p]vcstatus` to configure the feature. Requires the bot to have **Manage Channels** permission on voice channels.",
+    "install_msg": "Thanks for installing VCStatus! Use `[p]vcstatus` to configure it.\n\nThe bot needs the **Set Voice Channel Status** permission, plus **Manage Channels** while it is not connected to the target channel.\n\nData: this cog stores only per-guild settings (enabled flag, messages, per-channel overrides) in Red's Config.",
     "min_bot_version": "3.5.0",
     "min_python_version": [3, 8, 0],
     "permissions": ["manage_channels"],
