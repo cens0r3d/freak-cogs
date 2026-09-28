@@ -33,6 +33,8 @@ BULK_DELAY_SECONDS = 0.25
 # Distinguishes "we never set anything here" from "we set it to nothing".
 UNKNOWN = object()
 
+_MODES = ("on", "off", "reset")
+
 
 class VCStatus(commands.Cog):
 
@@ -51,6 +53,7 @@ class VCStatus(commands.Cog):
             default_message="{count} connected",
             clear_when_empty=False,
             channels={},
+            channel_empty={},
         )
 
     async def cog_unload(self) -> None:
@@ -85,27 +88,78 @@ class VCStatus(commands.Cog):
             await self._apply_status_to_all(ctx.guild)
 
     @vcstatus.command(name="empty", aliases=["clearempty"])
-    async def toggle_empty(self, ctx: commands.Context) -> None:
-        """Toggle clearing the status while a voice channel is empty.
+    async def toggle_empty(
+        self,
+        ctx: commands.Context,
+        channel: Optional[discord.VoiceChannel] = None,
+        mode: Optional[str] = None,
+    ) -> None:
+        """Control what an empty voice channel shows.
 
-        Enabled: a channel with nobody in it gets no status at all.
-        Disabled: it shows the configured message with a count of 0.
+        Without a channel this toggles the **server-wide default**. With a
+        channel it toggles that channel's own setting, which always wins over
+        the default. ``on`` / ``off`` set a value instead of toggling, and
+        ``reset`` drops the channel's override.
+
+        **Examples**
+
+        * ``[p]vcstatus empty`` — toggle the server default
+        * ``[p]vcstatus empty #lounge`` — toggle for #lounge
+        * ``[p]vcstatus empty #lounge on`` — clear it while empty
+        * ``[p]vcstatus empty #lounge reset`` — back to the server default
         """
-        current = await self.config.guild(ctx.guild).clear_when_empty()
-        new_state = not current
-        await self.config.guild(ctx.guild).clear_when_empty.set(new_state)
+        if channel is not None and channel.guild != ctx.guild:
+            await ctx.send("That channel is not in this server.")
+            return
 
-        await ctx.send(
-            "Empty voice channels will now "
-            + (
-                "have their status cleared."
-                if new_state
-                else "keep showing the message."
+        normalized = mode.lower() if mode else None
+        if normalized not in (None,) + _MODES:
+            await ctx.send("Mode must be `on`, `off` or `reset`.")
+            return
+
+        default = await self.config.guild(ctx.guild).clear_when_empty()
+
+        # ---- server-wide default -------------------------------------
+        if channel is None:
+            if normalized == "reset":
+                await ctx.send("No channel given, so there is no override to reset.")
+                return
+            new_state = (not default) if normalized is None else normalized == "on"
+            await self.config.guild(ctx.guild).clear_when_empty.set(new_state)
+            await ctx.send(
+                "Empty voice channels will now "
+                + ("have their status cleared." if new_state else "keep the message.")
             )
-        )
+            if await self.config.guild(ctx.guild).enabled():
+                await self._apply_status_to_all(ctx.guild, force=True)
+            return
+
+        # ---- per-channel override ------------------------------------
+        key = str(channel.id)
+
+        if normalized == "reset":
+            async with self.config.guild(ctx.guild).channel_empty() as overrides:
+                if key not in overrides:
+                    await ctx.send(f"{channel.mention} has no override to reset.")
+                    return
+                del overrides[key]
+            self._status_cache.pop(channel.id, None)
+            await ctx.send(f"{channel.mention} follows the server default again.")
+        else:
+            async with self.config.guild(ctx.guild).channel_empty() as overrides:
+                effective = overrides.get(key, default)
+                new_state = (
+                    (not effective) if normalized is None else normalized == "on"
+                )
+                overrides[key] = new_state
+            self._status_cache.pop(channel.id, None)
+            await ctx.send(
+                f"{channel.mention}: empty channels will now "
+                + ("have their status cleared." if new_state else "keep the message.")
+            )
 
         if await self.config.guild(ctx.guild).enabled():
-            await self._apply_status_to_all(ctx.guild, force=True)
+            await self._update_status(channel)
 
     @vcstatus.command(name="resync")
     async def resync(self, ctx: commands.Context) -> None:
@@ -192,14 +246,19 @@ class VCStatus(commands.Cog):
         else:
             await self.config.guild(ctx.guild).default_message.set("{count} connected")
             await self.config.guild(ctx.guild).clear_when_empty.set(False)
-            await self.config.guild(ctx.guild).enabled.set(False)
             await self.config.guild(ctx.guild).channels.set({})
+            await self.config.guild(ctx.guild).channel_empty.set({})
             self._status_cache.clear()
             await ctx.send("All reset and auto-status disabled.")
 
     @vcstatus.command(name="show")
     async def show(self, ctx: commands.Context) -> None:
         """Show the current configuration for this server."""
+
+        def label(channel_id: str) -> str:
+            ch = ctx.guild.get_channel(int(channel_id))
+            return ch.mention if ch else f"deleted-channel-{channel_id}"
+
         cfg = await self.config.guild(ctx.guild).all()
 
         lines = [
@@ -209,11 +268,19 @@ class VCStatus(commands.Cog):
             f"{'cleared' if cfg['clear_when_empty'] else 'keep the message'}",
         ]
 
-        if cfg["channels"]:
-            for ch_id, msg in cfg["channels"].items():
-                ch = ctx.guild.get_channel(int(ch_id))
-                label = ch.mention if ch else f"deleted-channel-{ch_id}"
-                lines.append(f"  - {label} -> {inline(msg)}")
+        overrides = [
+            f"  - {label(ch_id)} -> {inline(msg)}"
+            for ch_id, msg in cfg["channels"].items()
+        ]
+        overrides += [
+            f"  - {label(ch_id)} -> empty channels: "
+            f"{'cleared' if flag else 'keep the message'}"
+            for ch_id, flag in cfg["channel_empty"].items()
+        ]
+
+        if overrides:
+            lines.append("")
+            lines.extend(overrides)
 
         await ctx.send("\n".join(lines))
 
@@ -289,8 +356,11 @@ class VCStatus(commands.Cog):
 
         count = sum(1 for m in channel.members if not m.bot)
 
+        # A per-channel override always beats the server-wide default.
+        clear_empty = cfg["channel_empty"].get(str(channel.id), cfg["clear_when_empty"])
+
         # ``status`` is nullable on this route: null clears the status.
-        if count == 0 and cfg["clear_when_empty"]:
+        if count == 0 and clear_empty:
             resolved: Optional[str] = None
         else:
             msg = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
