@@ -2,14 +2,12 @@
     "author": [
         "cens0r3d"
     ],
-    "install_msg": "Thank you for installing KickAlerts!\n\nSetup: this cog talks to the external Kick.com API and needs OAuth2 credentials. Create them at https://kick.com/settings/developer, then run `[p]kickalert setcreds <client_id> <client_secret>` and `[p]kickalert authstatus` to verify.\n\nThen pick an alert channel with `[p]kickalert setchannel #channel` and add streamers with `[p]kickalert add <username>`.\n\nData: guild settings (channel/role IDs, custom messages, poll interval, per-streamer config) and the Kick usernames you add are stored via Red's Config. Message content is not stored.",
+    "install_msg": "Thank you for installing KickAlerts!\n\nSetup: this cog talks to the external Kick.com API (api.kick.com/public/v1) and needs OAuth2 app credentials. Create them at https://kick.com/settings/developer, then either run `[p]kickalert setcreds <client_id> <client_secret>` (bot owner, the message is deleted again) or store them in Red's shared token store with `[p]set api kick client_id,<id> client_secret,<secret>`. `[p]kickalert authstatus` verifies them.\n\nThen pick an alert channel with `[p]kickalert setchannel #channel` and add streamers with `[p]kickalert add <username> [channel]`. Alerts announce a stream when it goes live, keep the embed updated while it runs, and turn into a stream-ended message (or get deleted) when it stops.\n\nData: the credentials live in Red's shared API tokens, everything else (channel and role IDs, per-streamer settings, custom messages, the last known live state) in Red's Config. No message content and nothing about individual users is stored.",
     "name": "KickAlerts",
-    "short": "Kick.com livestream announcements using the official Kick API v2.",
-    "description": "Monitor Kick.com streamers using the official Kick API v2 with OAuth2 authentication. Get live notifications with beautiful embeds, viewer counts, categories, and more.",
-    "end_user_data_statement": "This cog stores guild-level configuration including channel IDs, role IDs, and Kick.com streamer usernames. API credentials are stored encrypted via Red's built-in token storage.",
-    "requirements": [
-        "aiohttp"
-    ],
+    "short": "Kick.com livestream announcements using the official Kick public API.",
+    "description": "Monitor Kick.com streamers through the official public API (api.kick.com/public/v1) with OAuth2 app credentials. Announces streams when they go live, refreshes the alert while the stream runs, and reports the stream end with its duration. Includes per-streamer channels, ping roles and custom messages with placeholders, viewer/category visibility, minimal or detailed embeds, per-guild poll intervals, pausing per streamer or per server, and a polling loop that retries rate limits and keeps working through API errors.",
+    "end_user_data_statement": "This cog stores guild-level configuration (alert channel and role IDs, poll interval, embed settings, per-streamer settings and the last known live state) in Red's Config, and the Kick API credentials in Red's shared API token store. No message content and no per-user data is stored.",
+    "requirements": [],
     "tags": [
         "kick",
         "livestream",
