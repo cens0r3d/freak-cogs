@@ -127,7 +127,7 @@ OSINT username enumeration: checks whether a username exists on 700+ websites fr
 | `[p]naminterset showmissing <true\|false>` | Show misses and errors without `--all` |
 | `[p]naminterset maxpages <1-40>` | Cap how many result pages a lookup posts |
 | `[p]naminterset perpage <5-20>` | Entries per result page |
-| `[p]naminterset role <add\|remove\|clear\|list> [@role]` | Roles allowed to run lookups |
+| `[p]naminterset role <add\|remove\|clear\|list> [@role]` | Restrict lookups to these roles (empty = everyone) |
 | `[p]naminterset reset` | Reset this server's settings |
 | `[p]naminterset concurrency <1-100>` | Parallel site checks (bot owner) |
 | `[p]naminterset timeout <5-120>` | HTTP timeout per request (bot owner) |
@@ -149,7 +149,7 @@ Options of `check`:
 
 Notes:
 
-- Lookups are limited to **Manage Server** holders and the bot owner. Grant a role access with `[p]naminterset role add @role`.
+- Lookups are open to **every member** by default. `[p]naminterset role add @role` restricts them to that role plus server managers, `[p]naminterset role clear` reopens them to everyone. Per-user cooldown and a global concurrency cap apply either way.
 - The dataset (~1 MB JSON) is downloaded in the background on load, cached on disk and refreshed after 6 hours; `[p]naminter refresh` forces it.
 - Requests are made with browser impersonation (curl-cffi) from the bot's host, so its IP is visible to the sites being checked.
 - Only the queried username leaves the host; nothing about it is stored. Hits are not cached or logged.
