@@ -1,0 +1,29 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Thank you for installing Naminter!\n\nSetup: nothing to configure, but the first lookup needs the WhatsMyName dataset (a ~1 MB JSON file that is downloaded in the background and cached).\n\nUsage: `[p]naminter check <username>` runs the lookup, `[p]naminter sites <text>` searches the site list, `[p]naminter categories` lists the categories, `[p]naminter stats` shows the dataset info.\n\nPermissions: lookups are limited to server managers (Manage Server) by default. Grant a role access with `[p]naminterset role add @role`.\n\nExternal services: this cog sends a request to every selected website from the WhatsMyName list (public dataset by WebBreacher, CC BY-SA 4.0) to test whether the username exists there, and downloads the dataset from GitHub on start. Queries are made from the bot's host, so its IP is visible to those sites.\n\nDependencies: `[p]cog install` pulls the `naminter` package, which brings curl-cffi, orjson and jsonschema plus the upstream CLI extras (rich, uvloop, weasyprint). Expect a longer install than usual and some disk usage.",
+    "name": "Naminter",
+    "short": "OSINT username enumeration across 700+ sites using WhatsMyName.",
+    "description": "Check whether a username exists on 700+ websites using the WhatsMyName dataset through the naminter library. Results are grouped by status (found, partial, ambiguous, missing, error), paginated for Discord, and can be exported as JSON, CSV or TXT. Includes category filters, a browser-impersonating HTTP client, per-server defaults and role based access.",
+    "end_user_data_statement": "This cog stores guild-level configuration (default mode, category filters, page limits, allowed role IDs) via Red's Config. It does not store usernames that are queried, their results, or any other end user data. The submitted username is transmitted to third-party websites listed in the WhatsMyName dataset during a lookup.",
+    "requirements": [
+        "naminter==1.0.9"
+    ],
+    "tags": [
+        "osint",
+        "whatsmyname",
+        "username",
+        "recon",
+        "security"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        11,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
