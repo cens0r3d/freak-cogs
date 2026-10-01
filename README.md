@@ -155,6 +155,7 @@ Notes:
 - Only the queried username leaves the host; nothing about it is stored. Hits are not cached or logged.
 - Found / partially found / ambiguous results are shown by default, misses and errors only with `--all` or `[p]naminterset showmissing true`.
 - `--export` writes every result (site, category, status, URL, HTTP code, timing, error) to a file — use it when a run hits the page cap or the run timeout.
+- Red puts the cogs directory on `sys.path`, so a cog folder named `naminter` shadows the `naminter` package it imports. The cog imports the library with those path entries removed, so it loads either way — but if you ever see `cannot import name 'CurlCFFISession' from partially initialized module 'naminter'`, delete the leftover `naminter/` folder in your cogs directory and reload.
 
 ## Extra setup
 
