@@ -147,6 +147,8 @@ Options of `check`:
 -a, --all                also list misses, unknowns and errors
 ```
 
+Under the summary of every lookup there is an **Export** button. Pressing it opens a small form that asks for the format (`JSON`, `CSV`, `TXT`) and the scope (*hits only* or *everything*, i.e. including misses, unknown and errors), and replies with the file **ephemerally** — only the person who started the lookup sees it, nothing is posted to the channel. The button carries that run's results and stops working after ten minutes or a bot restart; `--export` stays the non-interactive path for scripts.
+
 Notes:
 
 - Lookups are open to **every member** by default. `[p]naminterset role add @role` restricts them to that role plus server managers, `[p]naminterset role clear` reopens them to everyone. Per-user cooldown and a global concurrency cap apply either way.

@@ -28,6 +28,19 @@ from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import box, humanize_list, pagify
 from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 
+#: Export formats offered by the export button: value -> modal description.
+EXPORT_FORMATS: Tuple[Tuple[str, str, str], ...] = (
+    ("json", "JSON", "Every field, best for further processing"),
+    ("csv", "CSV", "One row per site, opens in a spreadsheet"),
+    ("txt", "TXT", "Plain readable lines"),
+)
+
+#: Which results an export can contain: value -> (modal label, description).
+EXPORT_SCOPES: Tuple[Tuple[str, str, str], ...] = (
+    ("found", "Hits only", "Found, partial and ambiguous"),
+    ("everything", "Everything", "Also misses, unknown and errors"),
+)
+
 
 def _import_naminter_library():
     """Import the naminter package, refusing a copy of this cog as a stand-in.
@@ -151,8 +164,10 @@ HELP_TEXT = (
     "`-x`, `--exclude-category a,b` — skip these categories\n"
     "`-m`, `--mode all|any` — strict (AND) or loose (OR) detection\n"
     "`-l`, `--limit <n>` — check at most n sites\n"
-    "`-e`, `--export json|csv|txt` — attach the full report as a file\n"
+    "`-e`, `--export json|csv|txt` — attach the report right away\n"
     "`-a`, `--all` — also list misses, unknowns and errors\n\n"
+    "After a run, the **Export** button under the summary asks for format and "
+    "scope and sends the file only to you.\n\n"
     "Access: everyone by default; server managers can limit it to roles with "
     "`[p]naminterset role add @role`.\n\n"
     "**Examples**\n"
@@ -202,6 +217,111 @@ def _category_line(key: str, values: Sequence[str]) -> str:
     label, empty = CATEGORY_SETTINGS[key]
     listed = ", ".join(f"`{item}`" for item in values) if values else f"*{empty}*"
     return f"{label}: {listed}"
+
+
+class ExportModal(discord.ui.Modal):
+    """Ask how the last lookup should be exported, then send the file privately.
+
+    Nothing is attached to the channel message: the file only goes to the person
+    who pressed the button, as an ephemeral reply.
+    """
+
+    format_select = discord.ui.Select(
+        placeholder="Format",
+        options=[
+            discord.SelectOption(label=label, value=value, description=description)
+            for value, label, description in EXPORT_FORMATS
+        ],
+    )
+    scope_select = discord.ui.Select(
+        placeholder="Which results",
+        options=[
+            discord.SelectOption(label=label, value=value, description=description)
+            for value, label, description in EXPORT_SCOPES
+        ],
+    )
+
+    def __init__(self, export_view: "ExportView") -> None:
+        super().__init__(title="Naminter export", timeout=300)
+        self.export_view = export_view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Build the requested file and reply with it ephemerally."""
+        view = self.export_view
+        if not self.format_select.values or not self.scope_select.values:
+            await interaction.response.send_message(
+                "❌ No format or scope selected — press **Export** again.",
+                ephemeral=True,
+            )
+            return
+        fmt = self.format_select.values[0]
+        scope = self.scope_select.values[0]
+        results = view.results if scope == "everything" else view.found
+        try:
+            payload, filename = view.cog._build_export(
+                fmt,
+                results=results,
+                usernames=view.usernames,
+                counts=view.counts,
+                sites_checked=view.sites_checked,
+            )
+            await interaction.response.send_message(
+                content=(
+                    f"📄 `{filename}` — {len(results)} of {view.sites_checked} checked "
+                    f"sites, format `{fmt}`."
+                ),
+                file=discord.File(io.BytesIO(payload), filename=filename),
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "❌ Could not send the file here — the bot is missing "
+                "**Attach Files** in this channel.",
+                ephemeral=True,
+            )
+
+
+class ExportView(discord.ui.View):
+    """One lookup's results plus the button that exports them on demand."""
+
+    def __init__(
+        self,
+        cog: "Naminter",
+        *,
+        author_id: int,
+        usernames: Sequence[str],
+        results: Sequence[Any],
+        found: Sequence[Any],
+        counts: Dict[str, int],
+        sites_checked: int,
+        timeout: int = 600,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.author_id = author_id
+        self.usernames = list(usernames)
+        self.results = list(results)
+        self.found = list(found)
+        self.counts = dict(counts)
+        self.sites_checked = sites_checked
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Only the person who started the lookup may export its results."""
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                f"Only <@{self.author_id}> can export this run. Start your own "
+                "with `[p]naminter check <username>`.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Export", emoji="📄", style=discord.ButtonStyle.primary)
+    async def export_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        """Open the export form."""
+        await interaction.response.send_modal(ExportModal(self))
 
 
 class Naminter(commands.Cog):
@@ -772,7 +892,9 @@ class Naminter(commands.Cog):
 
     @naminter.command(name="check", aliases=["lookup", "scan", "enumerate"])
     @_can_lookup()
-    @commands.bot_has_permissions(embed_links=True, add_reactions=True)
+    @commands.bot_has_permissions(
+        embed_links=True, add_reactions=True, attach_files=True
+    )
     @commands.max_concurrency(2, commands.BucketType.default, wait=True)
     @commands.cooldown(5, 60, commands.BucketType.user)
     async def naminter_check(
@@ -903,6 +1025,14 @@ class Naminter(commands.Cog):
 
         await progress.delete()
         mentions = discord.AllowedMentions.none()
+        export_view = self._export_view(
+            author=ctx.author,
+            usernames=args.usernames,
+            results=results,
+            found=[item for item in results if item.status in FOUND_STATUSES],
+            counts=counts,
+            sites_checked=len(site_names),
+        )
         if args.export:
             try:
                 payload, filename = self._build_export(
@@ -915,15 +1045,19 @@ class Naminter(commands.Cog):
                 await ctx.send(
                     embed=header,
                     file=discord.File(io.BytesIO(payload), filename=filename),
+                    view=export_view,
                     allowed_mentions=mentions,
                 )
             except discord.HTTPException:
-                await ctx.send(embed=header, allowed_mentions=mentions)
                 await ctx.send(
-                    "⚠️ Could not attach the export file (missing permissions?)"
+                    embed=header, view=export_view, allowed_mentions=mentions
+                )
+                await ctx.send(
+                    "⚠️ Could not attach the export file — press **Export** instead, "
+                    "or ask an admin to give the bot **Attach Files** here."
                 )
         else:
-            await ctx.send(embed=header, allowed_mentions=mentions)
+            await ctx.send(embed=header, view=export_view, allowed_mentions=mentions)
 
         if pages:
             await menu(ctx, pages, DEFAULT_CONTROLS, timeout=180)
@@ -934,6 +1068,27 @@ class Naminter(commands.Cog):
                 else "No hits. Add `--all` to see misses and errors."
             )
             await ctx.send(note, allowed_mentions=mentions)
+
+    def _export_view(
+        self,
+        *,
+        author: discord.abc.User,
+        usernames: Sequence[str],
+        results: Sequence[Any],
+        found: Sequence[Any],
+        counts: Dict[str, int],
+        sites_checked: int,
+    ) -> ExportView:
+        """Build the view that carries the run's results behind an export button."""
+        return ExportView(
+            self,
+            author_id=author.id,
+            usernames=usernames,
+            results=results,
+            found=found,
+            counts=counts,
+            sites_checked=sites_checked,
+        )
 
     async def _run_enumeration(
         self,
