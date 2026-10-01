@@ -16,12 +16,11 @@ import json
 import logging
 import os
 import shlex
-import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import discord
 from redbot.core import Config, commands
@@ -71,10 +70,8 @@ CurlCFFISession = _lib.CurlCFFISession
 WMNEngine = _lib.Naminter
 WMN_DATA_URL = _lib.WMN_DATA_URL
 NaminterError = _lib_exceptions.NaminterError
-WMNDataError = _lib_exceptions.WMNDataError
 WMNUnknownCategoriesError = _lib_exceptions.WMNUnknownCategoriesError
 WMNUnknownSiteError = _lib_exceptions.WMNUnknownSiteError
-WMNValidationError = _lib_exceptions.WMNValidationError
 WMNMode = _lib_models.WMNMode
 WMNStatus = _lib_models.WMNStatus
 
@@ -111,6 +108,12 @@ STATUS_LABEL: Dict[Any, str] = {
     WMNStatus.ERROR: "error",
     WMNStatus.NOT_VALID: "not valid",
 }
+
+#: Embed colours, in one place so the look stays consistent.
+EMBED_COLOUR = discord.Colour.teal()
+EMBED_COLOUR_DARK = discord.Colour.dark_teal()
+EMBED_COLOUR_ERROR = discord.Colour.red()
+
 
 DEFAULT_GLOBAL: Dict[str, Any] = {
     "http_timeout": 30,
@@ -159,10 +162,6 @@ HELP_TEXT = (
 )
 
 
-class LookupBusy(Exception):
-    """Raised when the engine cannot be prepared in time."""
-
-
 @dataclass
 class CheckArgs:
     """Parsed arguments of `[p]naminter check`."""
@@ -189,6 +188,20 @@ def _can_lookup():
         )
 
     return commands.check(predicate)
+
+
+#: Category settings and how they read in Discord: key -> (label, "nothing set" text).
+CATEGORY_SETTINGS: Dict[str, Tuple[str, str]] = {
+    "categories": ("Default categories", "all"),
+    "exclude_categories": ("Excluded categories", "none"),
+}
+
+
+def _category_line(key: str, values: Sequence[str]) -> str:
+    """Render one category setting as a single line for Discord."""
+    label, empty = CATEGORY_SETTINGS[key]
+    listed = ", ".join(f"`{item}`" for item in values) if values else f"*{empty}*"
+    return f"{label}: {listed}"
 
 
 class Naminter(commands.Cog):
@@ -401,7 +414,7 @@ class Naminter(commands.Cog):
             )
             try:
                 await engine.open()
-            except (WMNValidationError, WMNDataError, NaminterError) as exc:
+            except NaminterError as exc:
                 with contextlib.suppress(Exception):
                     await session.close()
                 raise commands.UserFeedbackCheckFailure(
@@ -613,7 +626,7 @@ class Naminter(commands.Cog):
                     self._status_line(item, with_username=with_username)
                     for item in chunk
                 ),
-                colour=discord.Colour.teal(),
+                colour=EMBED_COLOUR,
             )
             embed.set_footer(
                 text=(
@@ -638,7 +651,7 @@ class Naminter(commands.Cog):
         """Header embed describing what was checked and what came back."""
         embed = discord.Embed(
             title=f"Naminter · {' '.join(usernames)}",
-            colour=discord.Colour.dark_teal(),
+            colour=EMBED_COLOUR_DARK,
         )
         embed.add_field(
             name="Sites checked",
@@ -749,11 +762,9 @@ class Naminter(commands.Cog):
     # lookup commands
     # ------------------------------------------------------------------ #
 
-    @commands.guild_only()
     @commands.group(
         name="naminter", aliases=["nim", "wmn"], invoke_without_command=True
     )
-    @commands.bot_has_permissions(embed_links=True, add_reactions=True)
     async def naminter(self, ctx: commands.Context) -> None:
         """OSINT username enumeration with the WhatsMyName dataset."""
         if ctx.invoked_subcommand is None:
@@ -761,6 +772,7 @@ class Naminter(commands.Cog):
 
     @naminter.command(name="check", aliases=["lookup", "scan", "enumerate"])
     @_can_lookup()
+    @commands.bot_has_permissions(embed_links=True, add_reactions=True)
     @commands.max_concurrency(2, commands.BucketType.default, wait=True)
     @commands.cooldown(5, 60, commands.BucketType.user)
     async def naminter_check(
@@ -825,7 +837,7 @@ class Naminter(commands.Cog):
             embed=discord.Embed(
                 title=f"Naminter · {' '.join(args.usernames)}",
                 description=f"Checking {len(site_names)} sites…",
-                colour=discord.Colour.dark_teal(),
+                colour=EMBED_COLOUR_DARK,
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -847,7 +859,7 @@ class Naminter(commands.Cog):
                 embed=discord.Embed(
                     title="Naminter · lookup failed",
                     description=f"```{exc}```",
-                    colour=discord.Colour.red(),
+                    colour=EMBED_COLOUR_ERROR,
                 )
             )
             return
@@ -946,7 +958,7 @@ class Naminter(commands.Cog):
                     f"Checked **{done}/{len(site_names)}** sites…\n"
                     f"Found so far: **{sum(1 for r in results if r.status in FOUND_STATUSES)}**"
                 ),
-                colour=discord.Colour.dark_teal(),
+                colour=EMBED_COLOUR_DARK,
             )
 
         try:
@@ -978,6 +990,7 @@ class Naminter(commands.Cog):
 
     @naminter.command(name="sites", aliases=["list"])
     @_can_lookup()
+    @commands.bot_has_permissions(embed_links=True, add_reactions=True)
     async def naminter_sites(self, ctx: commands.Context, *, query: str = "") -> None:
         """List the sites of the WhatsMyName dataset.
 
@@ -1012,7 +1025,7 @@ class Naminter(commands.Cog):
             discord.Embed(
                 title=f"Naminter sites ({len(entries)} match{'' if len(entries) == 1 else 'es'})",
                 description=chunk,
-                colour=discord.Colour.teal(),
+                colour=EMBED_COLOUR,
             ).set_footer(text=f"Page {number}/{len(pages)}")
             for number, chunk in enumerate(pages, start=1)
         ]
@@ -1027,6 +1040,7 @@ class Naminter(commands.Cog):
 
     @naminter.command(name="categories", aliases=["cats"])
     @_can_lookup()
+    @commands.bot_has_permissions(embed_links=True)
     async def naminter_categories(self, ctx: commands.Context) -> None:
         """Show every category of the dataset with its site count."""
         if self._data is None:
@@ -1051,13 +1065,14 @@ class Naminter(commands.Cog):
         embed = discord.Embed(
             title=f"Naminter categories ({len(counter)})",
             description=box("\n".join(lines), lang="yaml"),
-            colour=discord.Colour.teal(),
+            colour=EMBED_COLOUR,
         )
         embed.set_footer(text="Use `-c <category>` to limit a check to one category")
         await ctx.send(embed=embed)
 
     @naminter.command(name="stats", aliases=["info", "dataset"])
     @_can_lookup()
+    @commands.bot_has_permissions(embed_links=True)
     async def naminter_stats(self, ctx: commands.Context) -> None:
         """Show dataset and engine information."""
         if self._data is None:
@@ -1074,7 +1089,7 @@ class Naminter(commands.Cog):
         embed = discord.Embed(
             title="Naminter dataset",
             description="Username enumeration over the WhatsMyName list.",
-            colour=discord.Colour.teal(),
+            colour=EMBED_COLOUR,
         )
         embed.add_field(name="Sites", value=str(len(sites)), inline=True)
         embed.add_field(name="Categories", value=str(len(categories)), inline=True)
@@ -1142,13 +1157,13 @@ class Naminter(commands.Cog):
     # settings
     # ------------------------------------------------------------------ #
 
-    @commands.guild_only()
     @commands.group(name="naminterset", aliases=["nimset"], invoke_without_command=True)
     async def naminterset(self, ctx: commands.Context) -> None:
         """Configure Naminter."""
         await ctx.send_help()
 
     @naminterset.command(name="show")
+    @commands.bot_has_permissions(embed_links=True)
     async def naminterset_show(self, ctx: commands.Context) -> None:
         """Show the current settings."""
         guild_settings = await self.config.guild(ctx.guild).all()
@@ -1158,7 +1173,7 @@ class Naminter(commands.Cog):
             for role in ctx.guild.roles
             if role.id in guild_settings["allowed_roles"]
         ]
-        embed = discord.Embed(title="Naminter settings", colour=discord.Colour.teal())
+        embed = discord.Embed(title="Naminter settings", colour=EMBED_COLOUR)
         embed.add_field(
             name="This server",
             value=(
@@ -1199,23 +1214,19 @@ class Naminter(commands.Cog):
         await self.config.guild(ctx.guild).mode.set(mode)
         await ctx.send(f"✅ Default detection mode is now `{mode}`.")
 
-    @naminterset.command(name="categories")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def naminterset_categories(
-        self, ctx: commands.Context, action: str = "list", *, categories: str = ""
+    async def _edit_category_setting(
+        self, ctx: commands.Context, key: str, action: str, categories: str
     ) -> None:
-        """Default categories for lookups: `add`, `remove`, `clear` or `list`."""
+        """Shared `add`/`remove`/`clear`/`list` handling for both category settings."""
         action = action.lower()
-        current = await self.config.guild(ctx.guild).categories()
+        setting = getattr(self.config.guild(ctx.guild), key)
+        current = await setting()
         if action == "list":
-            await ctx.send(
-                "Default categories: "
-                + (", ".join(f"`{item}`" for item in current) if current else "*all*")
-            )
+            await ctx.send(_category_line(key, current))
             return
         if action == "clear":
-            await self.config.guild(ctx.guild).categories.set([])
-            await ctx.send("✅ Default category filter cleared (all categories).")
+            await setting.set([])
+            await ctx.send("✅ " + _category_line(key, []))
             return
         if action not in ("add", "remove"):
             await ctx.send("❌ Use `add`, `remove`, `clear` or `list`.")
@@ -1227,60 +1238,35 @@ class Naminter(commands.Cog):
             await ctx.send("❌ Name at least one category.")
             return
         known = {site.get("cat", "") for site in (self._data or {}).get("sites", [])}
-        if known:
-            unknown = [item for item in requested if item not in known]
-            if unknown:
-                await ctx.send(
-                    f"❌ Unknown category: `{', '.join(unknown)}`. "
-                    "See `[p]naminter categories`."
-                )
-                return
+        unknown = [item for item in requested if known and item not in known]
+        if unknown:
+            await ctx.send(
+                f"❌ Unknown category: `{', '.join(unknown)}`. "
+                "See `[p]naminter categories`."
+            )
+            return
         if action == "add":
             updated = sorted(set(current) | set(requested))
         else:
             updated = [item for item in current if item not in requested]
-        await self.config.guild(ctx.guild).categories.set(updated)
-        await ctx.send(
-            "✅ Default categories: "
-            + (", ".join(f"`{item}`" for item in updated) if updated else "*all*")
-        )
+        await setting.set(updated)
+        await ctx.send("✅ " + _category_line(key, updated))
+
+    @naminterset.command(name="categories")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def naminterset_categories(
+        self, ctx: commands.Context, action: str = "list", *, categories: str = ""
+    ) -> None:
+        """Categories lookups are limited to: `add`, `remove`, `clear` or `list`."""
+        await self._edit_category_setting(ctx, "categories", action, categories)
 
     @naminterset.command(name="exclude")
     @commands.admin_or_permissions(manage_guild=True)
     async def naminterset_exclude(
         self, ctx: commands.Context, action: str = "list", *, categories: str = ""
     ) -> None:
-        """Categories to skip by default: `add`, `remove`, `clear` or `list`."""
-        action = action.lower()
-        current = await self.config.guild(ctx.guild).exclude_categories()
-        if action == "list":
-            await ctx.send(
-                "Excluded categories: "
-                + (", ".join(f"`{item}`" for item in current) if current else "*none*")
-            )
-            return
-        if action == "clear":
-            await self.config.guild(ctx.guild).exclude_categories.set([])
-            await ctx.send("✅ Excluded categories cleared.")
-            return
-        if action not in ("add", "remove"):
-            await ctx.send("❌ Use `add`, `remove`, `clear` or `list`.")
-            return
-        requested = [
-            item.strip().lower() for item in categories.split(",") if item.strip()
-        ]
-        if not requested:
-            await ctx.send("❌ Name at least one category.")
-            return
-        if action == "add":
-            updated = sorted(set(current) | set(requested))
-        else:
-            updated = [item for item in current if item not in requested]
-        await self.config.guild(ctx.guild).exclude_categories.set(updated)
-        await ctx.send(
-            "✅ Excluded categories: "
-            + (", ".join(f"`{item}`" for item in updated) if updated else "*none*")
-        )
+        """Categories lookups skip: `add`, `remove`, `clear` or `list`."""
+        await self._edit_category_setting(ctx, "exclude_categories", action, categories)
 
     @naminterset.command(name="showmissing", aliases=["showall"])
     @commands.admin_or_permissions(manage_guild=True)
