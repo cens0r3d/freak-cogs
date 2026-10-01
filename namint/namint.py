@@ -219,6 +219,21 @@ def _category_line(key: str, values: Sequence[str]) -> str:
     return f"{label}: {listed}"
 
 
+async def answer_interaction_error(interaction: discord.Interaction) -> None:
+    """Tell the user that something went wrong, whenever the reply is still open.
+
+    Without this a failing component callback is only logged, Discord never gets
+    an acknowledgement and the user sees "The application didn't respond in
+    time" instead of an error.
+    """
+    message = "❌ Export failed — the bot log has the details."
+    with contextlib.suppress(discord.HTTPException):
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
+
 class ExportModal(discord.ui.Modal):
     """Ask how the last lookup should be exported, then send the file privately.
 
@@ -256,7 +271,17 @@ class ExportModal(discord.ui.Modal):
             return
         fmt = self.format_select.values[0]
         scope = self.scope_select.values[0]
+        if view.results is None:
+            await interaction.response.send_message(
+                "⏳ These results are no longer available.",
+                ephemeral=True,
+            )
+            return
         results = view.results if scope == "everything" else view.found
+        # A big report (hundreds of sites) plus the upload can take longer than
+        # the three seconds Discord allows for the first response, so the
+        # interaction is acknowledged first and the file goes out as a followup.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             payload, filename = view.cog._build_export(
                 fmt,
@@ -265,7 +290,7 @@ class ExportModal(discord.ui.Modal):
                 counts=view.counts,
                 sites_checked=view.sites_checked,
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 content=(
                     f"📄 `{filename}` — {len(results)} of {view.sites_checked} checked "
                     f"sites, format `{fmt}`."
@@ -274,39 +299,61 @@ class ExportModal(discord.ui.Modal):
                 ephemeral=True,
             )
         except discord.HTTPException:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Could not send the file here — the bot is missing "
                 "**Attach Files** in this channel.",
                 ephemeral=True,
             )
 
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        """Answer the user instead of letting the interaction run out of time."""
+        log.exception("Namint: export modal failed", exc_info=error)
+        await answer_interaction_error(interaction)
+
 
 class ExportView(discord.ui.View):
-    """One lookup's results plus the button that exports them on demand."""
+    """One lookup's results plus the button that exports them on demand.
+
+    The button carries a fixed ``custom_id`` and a data-less instance is
+    registered in ``cog_load``, so a click on an old message (after a restart,
+    a reconnect or a cog reload) still gets an answer instead of running into
+    Discord's three second timeout.
+    """
+
+    BUTTON_ID = "namint:export"
 
     def __init__(
         self,
         cog: "Naminter",
         *,
-        author_id: int,
-        usernames: Sequence[str],
-        results: Sequence[Any],
-        found: Sequence[Any],
-        counts: Dict[str, int],
-        sites_checked: int,
-        timeout: int = 600,
+        author_id: Optional[int] = None,
+        usernames: Sequence[str] = (),
+        results: Optional[Sequence[Any]] = None,
+        found: Sequence[Any] = (),
+        counts: Optional[Dict[str, int]] = None,
+        sites_checked: int = 0,
+        timeout: Optional[int] = 600,
     ) -> None:
         super().__init__(timeout=timeout)
         self.cog = cog
         self.author_id = author_id
         self.usernames = list(usernames)
-        self.results = list(results)
+        self.results = None if results is None else list(results)
         self.found = list(found)
-        self.counts = dict(counts)
+        self.counts = dict(counts or {})
         self.sites_checked = sites_checked
+
+    @classmethod
+    def placeholder(cls, cog: "Naminter") -> "ExportView":
+        """The data-less instance registered at startup for leftover buttons."""
+        return cls(cog, timeout=None)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Only the person who started the lookup may export its results."""
+        if self.author_id is None:  # startup placeholder, its callback explains
+            return True
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
                 f"Only <@{self.author_id}> can export this run. Start your own "
@@ -316,12 +363,32 @@ class ExportView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Export", emoji="📄", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="Export",
+        emoji="📄",
+        style=discord.ButtonStyle.primary,
+        custom_id=BUTTON_ID,
+    )
     async def export_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        """Open the export form."""
+        """Open the export form, or explain that the run is gone."""
+        if self.results is None:
+            await interaction.response.send_message(
+                "⏳ These results are no longer available — the bot restarted, the "
+                "cog was reloaded, or the message is older than ten minutes. Run "
+                "`[p]naminter check <username>` again.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_modal(ExportModal(self))
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: Any
+    ) -> None:
+        """Answer the user instead of letting the interaction run out of time."""
+        log.exception("Namint: export button failed", exc_info=error)
+        await answer_interaction_error(interaction)
 
 
 class Naminter(commands.Cog):
@@ -357,8 +424,12 @@ class Naminter(commands.Cog):
     # ------------------------------------------------------------------ #
 
     async def cog_load(self) -> None:
-        """Warm the dataset cache in the background so the first lookup is fast."""
+        """Warm the dataset cache and register the export button for old messages."""
         self._load_task = asyncio.create_task(self._background_load())
+        # Persistent, data-less instance: a click on a button whose run is gone
+        # (restart, reconnect, reload) gets an explanation instead of Discord's
+        # "The application didn't respond in time".
+        self.bot.add_view(ExportView.placeholder(self))
 
     async def cog_unload(self) -> None:
         """Cancel background work and release the HTTP session."""
