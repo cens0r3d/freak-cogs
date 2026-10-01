@@ -60,9 +60,7 @@ class VoiceSay(commands.Cog):
                 try:
                     resolved = await self.bot.fetch_user(destination)
                 except discord.NotFound:
-                    await ctx.send(
-                        "Could not find a channel or user with that ID."
-                    )
+                    await ctx.send("Could not find a channel or user with that ID.")
                     return
             destination = resolved
 
@@ -208,9 +206,7 @@ class VoiceSay(commands.Cog):
             return round(granule / 48000.0, 2)
         return 1.0
 
-    async def _generate_waveform(
-        self, ogg_bytes: bytes, samples: int = 100
-    ) -> str:
+    async def _generate_waveform(self, ogg_bytes: bytes, samples: int = 100) -> str:
         """
         Generate a Discord waveform from the audio amplitude.
 
