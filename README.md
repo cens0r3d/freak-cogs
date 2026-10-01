@@ -147,7 +147,7 @@ Options of `check`:
 -a, --all                also list misses, unknowns and errors
 ```
 
-Under the summary of every lookup there is an **Export** button. Pressing it opens a small form that asks for the format (`JSON`, `CSV`, `TXT`) and the scope (*hits only* or *everything*, i.e. including misses, unknown and errors), and replies with the file **ephemerally** — only the person who started the lookup sees it, nothing is posted to the channel. The button carries that run's results and stops working after ten minutes or a bot restart; `--export` stays the non-interactive path for scripts.
+Under the summary of every lookup there is an **Export** button. Pressing it opens a small form that asks for the format (`JSON`, `CSV`, `TXT`) and the scope (*hits only* or *everything*, i.e. including misses, unknown and errors), and replies with the file **ephemerally** — only the person who started the lookup sees it, nothing is posted to the channel. If the API refuses the modal (selects in a modal need components-v2 support), the same two choices appear as a picker message with a **Send file** button instead. The button carries that run's results and stops working after ten minutes or a bot restart, and then tells you so; `--export` stays the non-interactive path for scripts.
 
 Notes:
 

@@ -234,26 +234,77 @@ async def answer_interaction_error(interaction: discord.Interaction) -> None:
             await interaction.response.send_message(message, ephemeral=True)
 
 
+def _export_options(
+    choices: Tuple[Tuple[str, str, str], ...],
+) -> List[discord.SelectOption]:
+    """Turn a value/label/description table into select options."""
+    return [
+        discord.SelectOption(label=label, value=value, description=description)
+        for value, label, description in choices
+    ]
+
+
+async def deliver_export(
+    interaction: discord.Interaction, export_view: "ExportView", fmt: str, scope: str
+) -> None:
+    """Acknowledge, build the report and hand it to the requester only.
+
+    A big report (hundreds of sites) plus the upload takes longer than the three
+    seconds Discord allows for the first response, so the interaction is
+    acknowledged with ``defer()`` first and the file follows as a followup.
+    """
+    results = export_view.results if scope == "everything" else export_view.found
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        payload, filename = export_view.cog._build_export(
+            fmt,
+            results=results,
+            usernames=export_view.usernames,
+            counts=export_view.counts,
+            sites_checked=export_view.sites_checked,
+        )
+        await interaction.followup.send(
+            content=(
+                f"📄 `{filename}` — {len(results)} of {export_view.sites_checked} "
+                f"checked sites, format `{fmt}`."
+            ),
+            file=discord.File(io.BytesIO(payload), filename=filename),
+            ephemeral=True,
+        )
+    except discord.HTTPException:
+        await interaction.followup.send(
+            "❌ Could not send the file here — the bot is missing "
+            "**Attach Files** in this channel.",
+            ephemeral=True,
+        )
+
+
 class ExportModal(discord.ui.Modal):
     """Ask how the last lookup should be exported, then send the file privately.
 
     Nothing is attached to the channel message: the file only goes to the person
     who pressed the button, as an ephemeral reply.
+
+    The selects sit inside ``Label`` containers on purpose - Discord accepts
+    only bare text inputs in a modal and rejects an action-row-wrapped select
+    with error 50035, so a select has to be wrapped (component type 18).
+    ``ExportView.export_button`` falls back to :class:`ExportPickerView` if the
+    API refuses the modal anyway.
     """
 
-    format_select = discord.ui.Select(
-        placeholder="Format",
-        options=[
-            discord.SelectOption(label=label, value=value, description=description)
-            for value, label, description in EXPORT_FORMATS
-        ],
+    format_select = discord.ui.Label(
+        text="Format",
+        description="How the report is written",
+        component=discord.ui.Select(
+            placeholder="Format", options=_export_options(EXPORT_FORMATS)
+        ),
     )
-    scope_select = discord.ui.Select(
-        placeholder="Which results",
-        options=[
-            discord.SelectOption(label=label, value=value, description=description)
-            for value, label, description in EXPORT_SCOPES
-        ],
+    scope_select = discord.ui.Label(
+        text="Which results",
+        description="Hits only, or everything the run produced",
+        component=discord.ui.Select(
+            placeholder="Which results", options=_export_options(EXPORT_SCOPES)
+        ),
     )
 
     def __init__(self, export_view: "ExportView") -> None:
@@ -261,55 +312,75 @@ class ExportModal(discord.ui.Modal):
         self.export_view = export_view
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        """Build the requested file and reply with it ephemerally."""
-        view = self.export_view
-        if not self.format_select.values or not self.scope_select.values:
+        """Check the two choices and hand off to the delivery helper."""
+        formats = self.format_select.component.values
+        scopes = self.scope_select.component.values
+        if not formats or not scopes:
             await interaction.response.send_message(
                 "❌ No format or scope selected — press **Export** again.",
                 ephemeral=True,
             )
             return
-        fmt = self.format_select.values[0]
-        scope = self.scope_select.values[0]
-        if view.results is None:
+        if self.export_view.results is None:
             await interaction.response.send_message(
                 "⏳ These results are no longer available.",
                 ephemeral=True,
             )
             return
-        results = view.results if scope == "everything" else view.found
-        # A big report (hundreds of sites) plus the upload can take longer than
-        # the three seconds Discord allows for the first response, so the
-        # interaction is acknowledged first and the file goes out as a followup.
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            payload, filename = view.cog._build_export(
-                fmt,
-                results=results,
-                usernames=view.usernames,
-                counts=view.counts,
-                sites_checked=view.sites_checked,
-            )
-            await interaction.followup.send(
-                content=(
-                    f"📄 `{filename}` — {len(results)} of {view.sites_checked} checked "
-                    f"sites, format `{fmt}`."
-                ),
-                file=discord.File(io.BytesIO(payload), filename=filename),
-                ephemeral=True,
-            )
-        except discord.HTTPException:
-            await interaction.followup.send(
-                "❌ Could not send the file here — the bot is missing "
-                "**Attach Files** in this channel.",
-                ephemeral=True,
-            )
+        await deliver_export(interaction, self.export_view, formats[0], scopes[0])
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception
     ) -> None:
         """Answer the user instead of letting the interaction run out of time."""
         log.exception("Namint: export modal failed", exc_info=error)
+        await answer_interaction_error(interaction)
+
+
+class ExportPickerView(discord.ui.View):
+    """Fallback picker: the same two choices as selects in a normal message.
+
+    Selects in a plain message are supported by every API version, so this is
+    what :meth:`ExportView.export_button` falls back to when the modal is
+    refused - the export never depends on the modal working.
+    """
+
+    def __init__(self, export_view: "ExportView") -> None:
+        super().__init__(timeout=180)
+        self.export_view = export_view
+        self.format_select = discord.ui.Select(
+            placeholder="Format", options=_export_options(EXPORT_FORMATS)
+        )
+        self.scope_select = discord.ui.Select(
+            placeholder="Which results", options=_export_options(EXPORT_SCOPES)
+        )
+        self.add_item(self.format_select)
+        self.add_item(self.scope_select)
+
+    @discord.ui.button(
+        label="Send file", emoji="📄", style=discord.ButtonStyle.primary, row=2
+    )
+    async def send_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        """Deliver the export with the two selected values."""
+        if not self.format_select.values or not self.scope_select.values:
+            await interaction.response.send_message(
+                "❌ Pick a format and a scope first.", ephemeral=True
+            )
+            return
+        await deliver_export(
+            interaction,
+            self.export_view,
+            self.format_select.values[0],
+            self.scope_select.values[0],
+        )
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: Any
+    ) -> None:
+        """Answer the user instead of letting the interaction run out of time."""
+        log.exception("Namint: export picker failed", exc_info=error)
         await answer_interaction_error(interaction)
 
 
@@ -381,7 +452,25 @@ class ExportView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        await interaction.response.send_modal(ExportModal(self))
+        try:
+            await interaction.response.send_modal(ExportModal(self))
+        except discord.HTTPException as exc:
+            # 50035 means Discord refused the modal payload itself (its form
+            # validation). Anything else is a real error and belongs in the log.
+            if getattr(exc, "code", None) != 50035:
+                raise
+            log.info(
+                "Namint: API declined the export modal (%s), using the picker", exc
+            )
+            with contextlib.suppress(discord.HTTPException):
+                await interaction.response.send_message(
+                    content=(
+                        "Pick the **format** and the **scope**, then press "
+                        "**Send file**."
+                    ),
+                    view=ExportPickerView(self),
+                    ephemeral=True,
+                )
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception, item: Any
