@@ -1,4 +1,4 @@
-from .naminter import Naminter
+from .namint import Naminter
 
 
 async def setup(bot):

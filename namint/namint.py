@@ -30,49 +30,42 @@ from redbot.core.utils.chat_formatting import box, humanize_list, pagify
 from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 
 
-def _load_naminter_library():
-    """Import the naminter library while our own package shadows it.
+def _import_naminter_library():
+    """Import the naminter package, refusing a copy of this cog as a stand-in.
 
-    Red puts the directory holding this cog on ``sys.path``, so a cog folder
-    named ``naminter`` is importable as a top-level package with the same name
-    as the library it depends on. Python then resolves ``import naminter`` to
-    this cog and the cog dies with "cannot import name ... from partially
-    initialized module". Import with those shadowing path entries removed and
-    put them back right afterwards.
+    Red puts the directory that holds a loaded cog on ``sys.path``, so any
+    folder in there named ``naminter`` is imported instead of the installed
+    library. The cog then dies with "cannot import name ... from partially
+    initialized module" - which looks like a missing dependency but is a name
+    collision. Say what to delete instead of leaving a cryptic traceback.
     """
-    package_dir = os.path.dirname(os.path.abspath(__file__))
-    owner_dir = os.path.dirname(package_dir)
-    shadowing = {os.path.normcase(package_dir), os.path.normcase(owner_dir)}
-    saved_path = list(sys.path)
-    sys.path[:] = [
-        entry
-        for entry in saved_path
-        if os.path.normcase(os.path.abspath(entry or os.getcwd())) not in shadowing
-    ]
     try:
         import naminter
         from naminter.core import exceptions as naminter_exceptions
         from naminter.core import models as naminter_models
-    finally:
-        sys.path[:] = saved_path
+    except ImportError as exc:
+        raise RuntimeError(
+            f"The naminter package could not be imported ({exc}). "
+            "Install it with `[p]pipinstall naminter==1.0.9` and reload the cog. "
+            "If a folder named `naminter` still sits in your cogs directory (an "
+            "older copy of this cog), delete it first - Red puts that directory "
+            "on sys.path, so such a folder shadows the library."
+        ) from exc
 
     library_dir = os.path.dirname(os.path.abspath(naminter.__file__))
-    if os.path.normcase(library_dir) == os.path.normcase(package_dir):
+    cog_dir = os.path.dirname(os.path.abspath(__file__))
+    if library_dir == cog_dir or os.path.dirname(library_dir) == os.path.dirname(
+        cog_dir
+    ):
         raise RuntimeError(
-            "This cog folder still shadows the naminter package "
-            f"({library_dir}). Rename the cog folder and reload."
+            f"`import naminter` resolved to {naminter.__file__} instead of the "
+            "installed library. A folder named `naminter` inside your cogs "
+            "directory shadows the package - delete it and reload the cog."
         )
     return naminter, naminter_exceptions, naminter_models
 
 
-try:
-    _lib, _lib_exceptions, _lib_models = _load_naminter_library()
-except ImportError as _import_error:  # pragma: no cover - only on a broken install
-    raise RuntimeError(
-        "The naminter package is missing. Install it with "
-        "`[p]cog install freak-cogs naminter` (or `[p]pipinstall naminter==1.0.9`) "
-        "and reload the cog."
-    ) from _import_error
+_lib, _lib_exceptions, _lib_models = _import_naminter_library()
 
 CurlCFFISession = _lib.CurlCFFISession
 WMNEngine = _lib.Naminter
@@ -85,7 +78,7 @@ WMNValidationError = _lib_exceptions.WMNValidationError
 WMNMode = _lib_models.WMNMode
 WMNStatus = _lib_models.WMNStatus
 
-log = logging.getLogger("red.freak_cogs.naminter")
+log = logging.getLogger("red.freak_cogs.namint")
 
 #: Statuses that count as "the account exists".
 FOUND_STATUSES: frozenset = frozenset(
