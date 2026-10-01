@@ -118,6 +118,8 @@ HELP_TEXT = (
     "`-l`, `--limit <n>` — check at most n sites\n"
     "`-e`, `--export json|csv|txt` — attach the full report as a file\n"
     "`-a`, `--all` — also list misses, unknowns and errors\n\n"
+    "Access: everyone by default; server managers can limit it to roles with "
+    "`[p]naminterset role add @role`.\n\n"
     "**Examples**\n"
     "`[p]naminter check torvalds`\n"
     "`[p]naminter check torvalds -c coding,social -l 100`\n"
@@ -144,14 +146,14 @@ class CheckArgs:
 
 
 def _can_lookup():
-    """Command check: server managers, the bot owner and whitelisted roles."""
+    """Command check: open to everyone unless the server whitelisted roles."""
 
     async def predicate(ctx: commands.Context) -> bool:
         if await ctx.cog._lookup_allowed(ctx):
             return True
         raise commands.UserFeedbackCheckFailure(
-            "You are not allowed to run OSINT lookups here. Ask a server manager "
-            "to grant you a role with `[p]naminterset role add @role`."
+            "Lookups in this server are limited to certain roles. Ask a server "
+            "manager to give you one of the roles from `[p]naminterset role list`."
         )
 
     return commands.check(predicate)
@@ -421,21 +423,27 @@ class Naminter(commands.Cog):
     # ------------------------------------------------------------------ #
 
     async def _lookup_allowed(self, ctx: commands.Context) -> bool:
-        """Whether the author may run OSINT lookups in this context."""
+        """Whether the author may run OSINT lookups in this context.
+
+        Lookups are open to every member by default. Adding at least one role
+        with `[p]naminterset role add` switches the server to whitelist mode:
+        then only server managers and those roles may look up.
+        """
         if await self.bot.is_owner(ctx.author):
             return True
         guild = ctx.guild
         if guild is None:
             return False
         member = ctx.author
-        if isinstance(member, discord.Member) and (
+        is_manager = isinstance(member, discord.Member) and (
             member.guild_permissions.manage_guild
             or member.guild_permissions.administrator
-        ):
-            return True
+        )
         allowed = await self.config.guild(guild).allowed_roles()
         if not allowed:
-            return False
+            return True
+        if is_manager:
+            return True
         return any(
             getattr(role, "id", None) in allowed
             for role in getattr(member, "roles", [])
@@ -1129,7 +1137,8 @@ class Naminter(commands.Cog):
                 f"show misses by default: `{guild_settings['show_missing']}`\n"
                 f"pages / entries per page: `{guild_settings['max_pages']}` / "
                 f"`{guild_settings['per_page']}`\n"
-                f"allowed roles: {humanize_list(roles) if roles else 'admins only'}"
+                f"lookup access: "
+                f"{humanize_list(roles) if roles else 'everyone (unrestricted)'}"
             ),
             inline=False,
         )
@@ -1280,19 +1289,25 @@ class Naminter(commands.Cog):
         action: str = "list",
         role: Optional[discord.Role] = None,
     ) -> None:
-        """Roles allowed to run lookups (on top of server managers)."""
+        """Restrict lookups to roles — empty means everyone may look up."""
         action = action.lower()
         current = await self.config.guild(ctx.guild).allowed_roles()
         if action == "list":
             resolved = [r.mention for r in ctx.guild.roles if r.id in current]
             await ctx.send(
-                "Allowed roles: "
-                + (", ".join(resolved) if resolved else "*server managers only*")
+                "Lookups are restricted to: "
+                + (
+                    ", ".join(resolved) + " (and server managers)"
+                    if resolved
+                    else "*nobody is restricted* — every member may look up"
+                )
             )
             return
         if action == "clear":
             await self.config.guild(ctx.guild).allowed_roles.set([])
-            await ctx.send("✅ Only server managers can run lookups now.")
+            await ctx.send(
+                "✅ Restriction removed — every member may run lookups again."
+            )
             return
         if action not in ("add", "remove"):
             await ctx.send("❌ Use `add`, `remove`, `clear` or `list`.")
@@ -1305,10 +1320,17 @@ class Naminter(commands.Cog):
         else:
             updated = [item for item in current if item != role.id]
         await self.config.guild(ctx.guild).allowed_roles.set(updated)
-        await ctx.send(
-            f"✅ {role.mention} {'can' if action == 'add' else 'can no longer'} "
-            "run lookups."
-        )
+        if not updated:
+            await ctx.send(
+                "✅ Restriction removed — every member may run lookups again."
+            )
+        else:
+            await ctx.send(
+                f"✅ Lookups are now limited to {role.mention} (and server managers)."
+                if action == "add"
+                else f"✅ {role.mention} can no longer run lookups; access is "
+                "unchanged for everyone else."
+            )
 
     @naminterset.command(name="reset")
     @commands.admin_or_permissions(manage_guild=True)
