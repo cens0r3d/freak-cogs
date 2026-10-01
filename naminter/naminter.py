@@ -14,7 +14,9 @@ import csv
 import io
 import json
 import logging
+import os
 import shlex
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,24 +29,61 @@ from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import box, humanize_list, pagify
 from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 
+
+def _load_naminter_library():
+    """Import the naminter library while our own package shadows it.
+
+    Red puts the directory holding this cog on ``sys.path``, so a cog folder
+    named ``naminter`` is importable as a top-level package with the same name
+    as the library it depends on. Python then resolves ``import naminter`` to
+    this cog and the cog dies with "cannot import name ... from partially
+    initialized module". Import with those shadowing path entries removed and
+    put them back right afterwards.
+    """
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    owner_dir = os.path.dirname(package_dir)
+    shadowing = {os.path.normcase(package_dir), os.path.normcase(owner_dir)}
+    saved_path = list(sys.path)
+    sys.path[:] = [
+        entry
+        for entry in saved_path
+        if os.path.normcase(os.path.abspath(entry or os.getcwd())) not in shadowing
+    ]
+    try:
+        import naminter
+        from naminter.core import exceptions as naminter_exceptions
+        from naminter.core import models as naminter_models
+    finally:
+        sys.path[:] = saved_path
+
+    library_dir = os.path.dirname(os.path.abspath(naminter.__file__))
+    if os.path.normcase(library_dir) == os.path.normcase(package_dir):
+        raise RuntimeError(
+            "This cog folder still shadows the naminter package "
+            f"({library_dir}). Rename the cog folder and reload."
+        )
+    return naminter, naminter_exceptions, naminter_models
+
+
 try:
-    from naminter import CurlCFFISession
-    from naminter import Naminter as WMNEngine
-    from naminter import WMN_DATA_URL
-    from naminter.core.exceptions import (
-        NaminterError,
-        WMNDataError,
-        WMNUnknownCategoriesError,
-        WMNUnknownSiteError,
-        WMNValidationError,
-    )
-    from naminter.core.models import WMNMode, WMNStatus
+    _lib, _lib_exceptions, _lib_models = _load_naminter_library()
 except ImportError as _import_error:  # pragma: no cover - only on a broken install
     raise RuntimeError(
         "The naminter package is missing. Install it with "
         "`[p]cog install freak-cogs naminter` (or `[p]pipinstall naminter==1.0.9`) "
         "and reload the cog."
     ) from _import_error
+
+CurlCFFISession = _lib.CurlCFFISession
+WMNEngine = _lib.Naminter
+WMN_DATA_URL = _lib.WMN_DATA_URL
+NaminterError = _lib_exceptions.NaminterError
+WMNDataError = _lib_exceptions.WMNDataError
+WMNUnknownCategoriesError = _lib_exceptions.WMNUnknownCategoriesError
+WMNUnknownSiteError = _lib_exceptions.WMNUnknownSiteError
+WMNValidationError = _lib_exceptions.WMNValidationError
+WMNMode = _lib_models.WMNMode
+WMNStatus = _lib_models.WMNStatus
 
 log = logging.getLogger("red.freak_cogs.naminter")
 
