@@ -222,7 +222,8 @@ Example:
 Notes:
 
 - Needs the **Move Members** permission, and **Connect** for `speak` mode. Members whose highest role is *above* the bot's are skipped (listed in `status` under "Not monitored") — equal roles are fine, so a bot with only `@everyone` can move plain members.
-- `[p]micwatch status` is the debugging command: who is counted, who is skipped and why, how many voice frames arrived, the last voice error and a pending retry.
+- `[p]micwatch status` is the debugging command: who is counted, who is skipped and why, where the bot sits versus the watched channels, how many voice frames arrived, the last voice error and a pending retry. `Voice frames` must show a non-zero *total* while connected — that proves the voice websocket is being read; a total that stays 0 while people talk means the bot is in the wrong channel or Discord relays nothing to it.
+- The bot joins **muted but not deafened**: a deafened client receives no audio stream, and Discord's speaking events ride on that stream.
 - After a move the member is ignored for `rearm` seconds, so moving them back does not instantly bounce them again. Do not put the target channel in the watch list.
 - `mic` mode cannot tell talking from a silent open microphone: on push-to-talk users it reacts to the mute button, not to speech. Use `speak` mode when that matters.
 - A `speak`-mode member who is **already** talking when the bot joins the channel is first picked up at their next start/stop — Discord only relays the transitions.
