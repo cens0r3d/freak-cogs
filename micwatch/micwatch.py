@@ -67,6 +67,9 @@ VOICE_CONNECT_TIMEOUT = 30.0
 VOICE_RETRY_COOLDOWN = 15.0
 VOICE_LINGER = 60.0  # stay connected while no watched channel has members
 VOICE_DEAD_GRACE = 90.0  # a client that is not connected this long gets recreated
+VOICE_FRAME_SILENCE = (
+    30.0  # connected this long without a single voice frame = warn once
+)
 
 DEFAULT_MESSAGE = "{user} kept their microphone open for {seconds}s and was moved."
 
@@ -139,6 +142,8 @@ class MicWatch(commands.Cog):
         self._frames: Dict[int, int] = {}  # relayed voice frames with opcode 5
         self._frames_with_user: Dict[int, int] = {}
         self._last_frame: Dict[int, float] = {}
+        self._no_frame_since: Dict[int, float] = {}
+        self._no_frame_warned: Set[int] = set()
 
         self._ticker.start()
 
@@ -401,6 +406,7 @@ class MicWatch(commands.Cog):
         if conf["mode"] == "speak":
             self._track.pop(guild.id, None)
             await self._sync_voice_connection(guild, conf, watched)
+            self._check_frames(guild, now)
         else:
             self._speak.pop(guild.id, None)
             task = self._voice_tasks.pop(guild.id, None)
@@ -413,6 +419,23 @@ class MicWatch(commands.Cog):
         if target is None:
             return
         await self._enforce(guild, conf, watched, target, now)
+
+    def _check_frames(self, guild: discord.Guild, now: float) -> None:
+        """Warn once when the bot is connected but Discord relays nothing to it at all."""
+        if guild.id not in self._joined or self._hook_frames.get(guild.id, 0):
+            self._no_frame_since.pop(guild.id, None)
+            return
+        since = self._no_frame_since.setdefault(guild.id, now)
+        if now - since >= VOICE_FRAME_SILENCE and guild.id not in self._no_frame_warned:
+            self._no_frame_warned.add(guild.id)
+            self._no_frame_since.pop(guild.id, None)
+            log.warning(
+                "MicWatch: connected to voice in %s for 30s but not one voice frame arrived - "
+                "Discord relays nothing to this bot. Check that it sits in the channel where people "
+                "talk (a pinned `micwatch join` channel wins over the watch list) and that it is not "
+                "deafened; `mic` mode needs none of this.",
+                guild,
+            )
 
     def _sync_mic(
         self, guild: discord.Guild, conf: dict, watched: Set[int], now: float
@@ -550,6 +573,10 @@ class MicWatch(commands.Cog):
             )
             return False
         self._joined.add(guild.id)
+        self._no_frame_since[guild.id] = (
+            now  # start of the "is anything arriving?" window
+        )
+        self._no_frame_warned.discard(guild.id)
         self._last_voice_error.pop(guild.id, None)
         self._next_attempt.pop(guild.id, None)
         self._empty_since.pop(guild.id, None)
@@ -563,6 +590,7 @@ class MicWatch(commands.Cog):
         self._speak.pop(guild.id, None)
         self._empty_since.pop(guild.id, None)
         self._dead_since.pop(guild.id, None)
+        self._no_frame_since.pop(guild.id, None)
         vc = guild.voice_client
         if vc is None:
             return
