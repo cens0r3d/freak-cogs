@@ -65,7 +65,7 @@ Setup:
 [p]kickalert add <kick_username>
 ```
 
-Grab API credentials at https://kick.com/settings/developer. Instead of `setcreds` you can also store them in Red's shared token store: `[p]set api kick client_id,<id> client_secret,<secret>` — both end up in the same place, which is where the cog reads them.
+Grab API credentials at https://kick.com/settings/developer. Instead of `setcreds` you can also store them in Red's shared token store: `[p]set api kick client_id,<id> client_secret,<secret>` — both end up in the same place, which is where the cog reads them. When no credentials are set, `[p]kickalert authstatus` offers a button that opens Red's own secure form for this (bot owner only), and credentials changed with `[p]set api` take effect immediately — no reload needed.
 
 | Command | What it does |
 | --- | --- |

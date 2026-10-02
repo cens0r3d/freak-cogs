@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import struct
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import discord
 from redbot.core import commands
@@ -18,8 +18,13 @@ class VoiceSay(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def red_delete_data_for_user(self, *, requester, user_id):
-        pass
+    async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
+        """Nothing is stored per user; audio attachments are relayed, not kept."""
+        return
+
+    async def red_get_data_for_user(self, *, user_id: int) -> Dict[str, io.BytesIO]:
+        """Nothing is stored per user; audio attachments are relayed, not kept."""
+        return {}
 
     @commands.command(name="voicesay")
     @commands.bot_has_permissions(send_messages=True, attach_files=True)
