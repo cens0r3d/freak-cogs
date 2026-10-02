@@ -293,13 +293,20 @@ class MicWatch(commands.Cog):
             if burst is None or (
                 burst["end"] is not None and now - burst["end"] > grace
             ):
-                guild_map[user_id] = {"start": now, "end": None, "talking": True}
+                guild_map[user_id] = {
+                    "start": now,
+                    "end": None,
+                    "talking": True,
+                    "last": now,
+                }
             else:
                 burst["talking"] = True
                 burst["end"] = None
+                burst["last"] = now
         elif burst is not None:
             burst["talking"] = False
             burst["end"] = now
+            burst["last"] = now
 
     def _handle_voice_payload(self, ws: Any, msg: Any) -> None:
         try:
@@ -1189,7 +1196,11 @@ class MicWatch(commands.Cog):
                 end = burst["end"]
                 state = "talking" if burst["talking"] else "silent"
                 seconds = (now if burst["talking"] else end) - burst["start"]
-                lines.append(f"{member} — {seconds:.1f}s ({state})")
+                last = burst.get("last", burst["start"])
+                lines.append(
+                    f"{member} — {seconds:.1f}s ({state}, "
+                    f"grace left {max(0.0, float(conf['grace']) - (now - last)):.1f}s)"
+                )
 
         vc = ctx.guild.voice_client
         embed = discord.Embed(
