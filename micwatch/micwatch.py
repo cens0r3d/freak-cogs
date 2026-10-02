@@ -55,6 +55,15 @@ TICK_SECONDS = 2.0
 MIN_THRESHOLD = 3.0
 MAX_THRESHOLD = 3600.0
 
+# Voice connection handling. Discord's UDP + websocket handshake happens *inside* the timeout
+# passed to ``connect()``, so a too-small value force-disconnects a handshake that is still
+# progressing ("Voice handshake complete" is logged before the socket part). discord.py's own
+# default is 30 s; a failed attempt then gets a cool-down instead of a retry every tick.
+VOICE_CONNECT_TIMEOUT = 30.0
+VOICE_RETRY_COOLDOWN = 15.0
+VOICE_LINGER = 60.0  # stay connected while no watched channel has members
+VOICE_DEAD_GRACE = 90.0  # a client that is not connected this long gets recreated
+
 DEFAULT_MESSAGE = "{user} kept their microphone open for {seconds}s and was moved."
 
 DEFAULT_GUILD = {
@@ -113,6 +122,16 @@ class MicWatch(commands.Cog):
         # guild_id -> channel_id that staff pinned with [p]micwatch join
         self._manual: Dict[int, int] = {}
         self._warned: Set[int] = set()
+        # voice connection bookkeeping
+        self._voice_tasks: Dict[int, asyncio.Task] = {}
+        self._next_attempt: Dict[int, float] = {}
+        self._last_voice_error: Dict[int, str] = {}
+        self._empty_since: Dict[int, float] = {}
+        self._dead_since: Dict[int, float] = {}
+        # diagnostics for `[p]micwatch status`
+        self._frames: Dict[int, int] = {}  # relayed voice frames with opcode 5
+        self._frames_with_user: Dict[int, int] = {}
+        self._last_frame: Dict[int, float] = {}
 
         self._ticker.start()
 
@@ -120,6 +139,9 @@ class MicWatch(commands.Cog):
 
     def cog_unload(self) -> None:
         self._ticker.cancel()
+        for task in self._voice_tasks.values():
+            task.cancel()
+        self._voice_tasks.clear()
         for guild_id in list(self._joined):
             guild = self.bot.get_guild(guild_id)
             vc = guild.voice_client if guild else None
@@ -144,30 +166,37 @@ class MicWatch(commands.Cog):
     def _watched(conf: dict) -> Set[int]:
         return {int(c) for c in conf.get("watch_channels") or []}
 
-    def _eligible(self, member: discord.Member, conf: dict, watched: Set[int]) -> bool:
-        """Can/will this member be moved right now?"""
+    def _skip_reason(
+        self, member: discord.Member, conf: dict, watched: Set[int]
+    ) -> Optional[str]:
+        """Why this member is not tracked right now, or None if nothing blocks them."""
         guild = member.guild
         if member.id == guild.me.id:
-            return False
+            return "me"
         if conf["ignore_bots"] and member.bot:
-            return False
+            return "bot"
         if member.id in (conf.get("immune_users") or []):
-            return False
+            return "immune (user)"
         if {r.id for r in member.roles} & {
             int(r) for r in (conf.get("immune_roles") or [])
         }:
-            return False
+            return "immune (role)"
         if member.id in self._cooldown.get(guild.id, {}):
-            return False
+            return "rearm cooldown"
         voice = member.voice
         if voice is None or voice.channel is None:
-            return False
+            return "not in voice"
         if watched and voice.channel.id not in watched:
-            return False
-        if member.top_role >= guild.me.top_role:
-            # Discord will refuse the move anyway (role hierarchy)
-            return False
-        return True
+            return "channel not watched"
+        if member.top_role > guild.me.top_role:
+            # Discord refuses moves for members whose highest role is *above* the bot's.
+            # Equal positions (e.g. both only @everyone) are allowed, so compare strictly.
+            return "higher role than mine"
+        return None
+
+    def _eligible(self, member: discord.Member, conf: dict, watched: Set[int]) -> bool:
+        """Can/will this member be moved right now?"""
+        return self._skip_reason(member, conf, watched) is None
 
     def _forget(self, guild_id: int, member_id: int) -> None:
         self._track.get(guild_id, {}).pop(member_id, None)
@@ -200,7 +229,9 @@ class MicWatch(commands.Cog):
             if guild.id not in self._warned:
                 self._warned.add(guild.id)
                 log.warning(
-                    "MicWatch: missing 'Move Members' permission in guild %s (%s).",
+                    "MicWatch: Discord refused the move in guild %s (%s) - either the bot is "
+                    "missing the 'Move Members' permission, or the member's highest role is not "
+                    "below the bot's highest role.",
                     guild.id,
                     guild.name,
                 )
@@ -257,13 +288,19 @@ class MicWatch(commands.Cog):
                 return
             data = msg.get("d") or {}
             user_id = data.get("user_id")
-            if user_id is None:
-                return
             state = getattr(ws, "_connection", None)
             voice_client = getattr(state, "voice_client", None)
             guild = getattr(voice_client, "guild", None)
             if guild is None:
                 return
+            self._frames[guild.id] = self._frames.get(guild.id, 0) + 1
+            self._last_frame[guild.id] = time.monotonic()
+            if user_id is None:
+                # Discord did not name the speaker: without a user id there is nothing to time
+                return
+            self._frames_with_user[guild.id] = (
+                self._frames_with_user.get(guild.id, 0) + 1
+            )
             speaking = int(data.get("speaking") or 0)
             self._record_speaking(guild.id, int(user_id), bool(speaking & 0b1))
         except Exception:
@@ -324,12 +361,11 @@ class MicWatch(commands.Cog):
         if not conf["enabled"]:
             self._track.pop(guild.id, None)
             self._speak.pop(guild.id, None)
+            task = self._voice_tasks.pop(guild.id, None)
+            if task is not None:
+                task.cancel()
             if guild.id in self._joined:
-                vc = guild.voice_client
-                if vc is not None:
-                    with contextlib.suppress(Exception):
-                        await vc.disconnect(force=True)
-                self._joined.discard(guild.id)
+                await self._leave_voice(guild, reason="disabled")
             return
 
         self._purge(guild.id, now)
@@ -346,12 +382,11 @@ class MicWatch(commands.Cog):
             await self._sync_voice_connection(guild, conf, watched)
         else:
             self._speak.pop(guild.id, None)
+            task = self._voice_tasks.pop(guild.id, None)
+            if task is not None:
+                task.cancel()
             if guild.id in self._joined:  # left over from a mode switch
-                vc = guild.voice_client
-                if vc is not None:
-                    with contextlib.suppress(Exception):
-                        await vc.disconnect(force=True)
-                self._joined.discard(guild.id)
+                await self._leave_voice(guild, reason="mic mode needs no connection")
             self._sync_mic(guild, conf, watched, now)
 
         if target is None:
@@ -453,38 +488,135 @@ class MicWatch(commands.Cog):
                 best, best_count = channel, count
         return best
 
+    async def _connect_voice(
+        self, guild: discord.Guild, channel: discord.VoiceChannel
+    ) -> bool:
+        """Connect once, and remember the failure plus a cool-down instead of retrying every tick."""
+        now = time.monotonic()
+        try:
+            await channel.connect(
+                timeout=VOICE_CONNECT_TIMEOUT,
+                reconnect=True,
+                self_deaf=True,
+                self_mute=True,
+            )
+        except discord.ClientException as exc:  # another client got there first
+            log.debug("MicWatch: %s already has a voice client: %s", guild, exc)
+            return True
+        except asyncio.TimeoutError:
+            self._last_voice_error[guild.id] = (
+                f"connect timed out after {VOICE_CONNECT_TIMEOUT:.0f}s"
+            )
+            self._next_attempt[guild.id] = now + VOICE_RETRY_COOLDOWN
+            log.warning(
+                "MicWatch: voice connect to %s in %s timed out after %.0fs (Discord's UDP and "
+                "websocket handshake are inside that timeout) - next try in %.0fs.",
+                channel,
+                guild,
+                VOICE_CONNECT_TIMEOUT,
+                VOICE_RETRY_COOLDOWN,
+            )
+            return False
+        except Exception as exc:
+            self._last_voice_error[guild.id] = f"{type(exc).__name__}: {exc}"
+            self._next_attempt[guild.id] = now + VOICE_RETRY_COOLDOWN
+            log.warning(
+                "MicWatch: could not join %s in %s: %s - next try in %.0fs.",
+                channel,
+                guild,
+                exc,
+                VOICE_RETRY_COOLDOWN,
+            )
+            return False
+        self._joined.add(guild.id)
+        self._last_voice_error.pop(guild.id, None)
+        self._next_attempt.pop(guild.id, None)
+        self._empty_since.pop(guild.id, None)
+        self._dead_since.pop(guild.id, None)
+        log.info("MicWatch: joined %s in %s.", channel, guild)
+        return True
+
+    async def _leave_voice(self, guild: discord.Guild, *, reason: str) -> None:
+        """Disconnect a connection we opened ourselves."""
+        self._joined.discard(guild.id)
+        self._speak.pop(guild.id, None)
+        self._empty_since.pop(guild.id, None)
+        self._dead_since.pop(guild.id, None)
+        vc = guild.voice_client
+        if vc is None:
+            return
+        with contextlib.suppress(Exception):
+            await vc.disconnect(force=True)
+        log.info("MicWatch: left voice in %s (%s).", guild, reason)
+
     async def _sync_voice_connection(
         self, guild: discord.Guild, conf: dict, watched: Set[int]
     ) -> None:
-        if not VOICE_READY:
-            return
+        now = time.monotonic()
+        task = self._voice_tasks.get(guild.id)
+        if task is not None and task.done():
+            self._voice_tasks.pop(guild.id, None)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.result()
+        connecting = guild.id in self._voice_tasks
+
         wanted = self._wanted_channel(guild, conf, watched)
         vc = guild.voice_client
+
         if wanted is None:
+            if connecting:
+                return
+            empty_since = self._empty_since.setdefault(guild.id, now)
+            if vc is not None and now - empty_since < VOICE_LINGER:
+                # keep the connection for a moment: people hop between channels all the time
+                if vc.is_connected():
+                    await self._install_hook(guild)
+                return
             if vc is not None and guild.id in self._joined:
-                with contextlib.suppress(Exception):
-                    await vc.disconnect(force=True)
-                self._joined.discard(guild.id)
-            self._speak.pop(guild.id, None)
+                await self._leave_voice(guild, reason="no watched channel has members")
+            else:
+                self._speak.pop(guild.id, None)
+                self._empty_since.pop(guild.id, None)
             return
-        if vc is None:
-            try:
-                await wanted.connect(
-                    timeout=20.0, reconnect=True, self_deaf=True, self_mute=True
-                )
-            except Exception as exc:
-                log.warning("MicWatch: could not join %s in %s: %s", wanted, guild, exc)
+
+        self._empty_since.pop(guild.id, None)
+        if not VOICE_READY:
+            return
+
+        if vc is not None:
+            # discord.py registers a client *before* the handshake finishes, so an existing
+            # client may still be connecting: never start a second one (that raises
+            # ClientException) and never tear one down - its own reconnect flow owns the socket.
+            if not vc.is_connected():
+                dead_since = self._dead_since.setdefault(guild.id, now)
+                if now - dead_since > VOICE_DEAD_GRACE:
+                    log.warning(
+                        "MicWatch: voice client in %s has not been connected for %.0fs - "
+                        "recreating it.",
+                        guild,
+                        now - dead_since,
+                    )
+                    await self._leave_voice(guild, reason="stale client")
+                    self._next_attempt[guild.id] = now + 5.0
                 return
-            self._joined.add(guild.id)
-        elif vc.channel != wanted:
-            try:
-                await vc.move_to(wanted)
-            except Exception as exc:
-                log.warning(
-                    "MicWatch: could not move to %s in %s: %s", wanted, guild, exc
-                )
-                return
-        await self._install_hook(guild)
+            self._dead_since.pop(guild.id, None)
+            if vc.channel != wanted:
+                try:
+                    await vc.move_to(wanted)
+                except Exception as exc:
+                    log.warning(
+                        "MicWatch: could not move to %s in %s: %s", wanted, guild, exc
+                    )
+                    return
+            await self._install_hook(guild)
+            return
+
+        if connecting or now < self._next_attempt.get(guild.id, 0.0):
+            return
+        self._voice_tasks[guild.id] = self.bot.loop.create_task(
+            self._connect_voice(guild, wanted),
+            name=f"micwatch-voice-{guild.id}",
+        )
 
     # ------------------------------------------------------------------ listeners
 
@@ -836,30 +968,54 @@ class MicWatch(commands.Cog):
             await ctx.send("Give a voice channel or join one yourself.")
             return
         self._manual[ctx.guild.id] = channel.id
-        try:
-            await channel.connect(
-                timeout=20.0, reconnect=True, self_deaf=True, self_mute=True
+        current = ctx.guild.voice_client
+        if current is not None:
+            if not current.is_connected():
+                await ctx.send(
+                    "I still have a voice client for this server that is connecting/dead — "
+                    "`leave` first, or wait for the cool-down, I retry on my own."
+                )
+                return
+            if current.channel != channel:
+                try:
+                    await current.move_to(channel)
+                except Exception as exc:
+                    await ctx.send(f"Could not move there: {exc}")
+                    return
+            await self._install_hook(ctx.guild)
+            await ctx.send(
+                f"Sitting in {channel.mention} — pinned until `{ctx.clean_prefix}micwatch leave`."
             )
-        except Exception as exc:
-            await ctx.send(f"Could not join: {exc}")
             return
-        self._joined.add(ctx.guild.id)
-        await self._install_hook(ctx.guild)
+        task = self._voice_tasks.pop(ctx.guild.id, None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        if await self._connect_voice(ctx.guild, channel):
+            await self._install_hook(ctx.guild)
+            await ctx.send(
+                f"Joined {channel.mention} — pinned until `{ctx.clean_prefix}micwatch leave`."
+            )
+            return
+        reason = self._last_voice_error.get(ctx.guild.id, "unknown error")
         await ctx.send(
-            f"Joined {channel.mention} — pinned until `{ctx.clean_prefix}micwatch leave`."
+            f"Could not join {channel.mention}: {reason}. I retry every "
+            f"{VOICE_RETRY_COOLDOWN:.0f}s while `speak` mode is on — details: "
+            f"`{ctx.clean_prefix}micwatch status`."
         )
 
     @micwatch.command(name="leave")
     async def mw_leave(self, ctx: commands.Context) -> None:
         """Disconnect the bot and drop the manual channel pin."""
         self._manual.pop(ctx.guild.id, None)
-        vc = ctx.guild.voice_client
-        if vc is None:
+        task = self._voice_tasks.pop(ctx.guild.id, None)
+        if task is not None:
+            task.cancel()
+        if ctx.guild.voice_client is None:
             await ctx.send("I am not in a voice channel.")
             return
-        await vc.disconnect(force=True)
-        self._joined.discard(ctx.guild.id)
-        self._speak.pop(ctx.guild.id, None)
+        await self._leave_voice(ctx.guild, reason="asked to leave")
         await ctx.send("Disconnected.")
 
     @micwatch.command(name="settings", aliases=["show", "config"])
@@ -957,6 +1113,44 @@ class MicWatch(commands.Cog):
             name="Voice libraries",
             value=f"pynacl: {HAVE_NACL} | davey: {HAVE_DAVEY}",
         )
+
+        frames = self._frames.get(ctx.guild.id, 0)
+        named = self._frames_with_user.get(ctx.guild.id, 0)
+        last = self._last_frame.get(ctx.guild.id)
+        embed.add_field(
+            name="Speaking frames",
+            value=(
+                f"{frames} op-5 frames, {named} with a user id"
+                + (f", last {now - last:.0f}s ago" if last else "")
+            ),
+        )
+        if ctx.guild.id in self._next_attempt:
+            embed.add_field(
+                name="Voice retry",
+                value=f"in {max(0.0, self._next_attempt[ctx.guild.id] - now):.0f}s",
+            )
+        if ctx.guild.id in self._last_voice_error:
+            embed.add_field(
+                name="Last voice error",
+                value=self._last_voice_error[ctx.guild.id],
+                inline=False,
+            )
+
+        watched = self._watched(conf)
+        blocked = []
+        for channel in ctx.guild.voice_channels:
+            if watched and channel.id not in watched:
+                continue
+            for member in channel.members:
+                reason = self._skip_reason(member, conf, watched)
+                if reason:
+                    blocked.append(f"{member} — {reason}")
+        if blocked:
+            embed.add_field(
+                name="Not monitored",
+                value="\n".join(blocked[:10])[:1024],
+                inline=False,
+            )
         await ctx.send(embed=embed)
 
     @micwatch.command(name="reset")

@@ -86,6 +86,26 @@ For real voice activity instead of the mute-button state:
   and does not handle opcode 5 itself — and keeps a per-member burst (`start`, `end`, `talking`).
   A silent gap longer than `grace` resets the burst.
 * After a move the member is ignored for `rearm` seconds, so staff can move them back without an
-  instant ping-pong, and a member who outranks the bot is skipped instead of raising.
-* `speak` mode connects to the watched channel with members, follows them if they move to another
-  watched channel, and disconnects when nobody is left.
+  instant ping-pong.
+* A member counts as movable when their **highest role is not above the bot's** — equal roles are
+  fine, so a bot that only has `@everyone` can move plain members, and everybody it cannot touch is
+  listed in `status` under "Not monitored" with the reason.
+* `speak` mode connects to the watched channel that has members, follows them if they move to
+  another watched channel, and leaves once no watched channel has anybody in it (after a short
+  grace window, so channel hopping does not cause join/leave churn).
+* Connecting is single-flight and patient: 30 s timeout (Discord's UDP + websocket handshake is
+  inside it), one retry every 15 s after a failure, and a client that discord.py is reconnecting on
+  its own is never replaced by a second one.
+
+## When it does not move anybody
+
+`[p]micwatch status` answers it:
+
+| Field | Meaning |
+| --- | --- |
+| `nothing tracked` | nobody qualifies: check the "Not monitored" field, the mode and the watch list |
+| `Not monitored` | who is skipped and why (`higher role than mine`, `immune (role)`, `rearm cooldown`, …) |
+| `Speaking frames` | op-5 frames the voice websocket relayed; `0` while people talk = Discord is not relaying to the bot (re-join the channel, check the voice connection field) |
+| `Voice retry` / `Last voice error` | a pending reconnect and why the last attempt failed |
+| `Move permission` | whether the bot has **Move Members** — without it Discord refuses every move (also logged once per server) |
+
