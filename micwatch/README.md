@@ -15,7 +15,7 @@ It also counts somebody sitting silently with an open mic.
 
 `speak` mode makes the bot sit in the watched channel (joined muted + deafened so it never
 shows up as a speaker) and read the `Speaking` frames (voice gateway opcode 5) from the voice
-websocket. That requires `pynacl` in the bot venv and the **Connect** permission.
+websocket. That requires voice support in the bot venv (`pynacl` + `davey`) and the **Connect** permission.
 
 Known limit of `speak` mode: Discord only relays *transitions*. Someone who was already talking
 when the bot joined the channel is picked up at their next start/stop, not retroactively.
@@ -24,7 +24,14 @@ when the bot joined the channel is picked up at their next start/stop, not retro
 
 Copy the folder to `~/.local/share/Red-DiscordBot/data/<instance>/cogs/CogManager/cogs/micwatch/`,
 then `[p]unload micwatch` / `[p]load micwatch` (or `[p]load micwatch` the first time).
-For `speak` mode: `pip install pynacl` in the bot venv.
+For `speak` mode, install voice support in the bot venv first:
+
+```bash
+pip install -U "Red-DiscordBot[voice]"        # pynacl + davey
+# or, on a running bot:  [p]pipinstall pynacl davey
+```
+
+`pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session that discord.py 2.6+ negotiates.
 
 ## Commands (`[p]micwatch`, aliases `micmon`, `mwatch`)
 
