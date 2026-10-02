@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -111,10 +113,25 @@ class _Track:
         return self.acc + (now - self.since if self.since is not None else 0.0)
 
 
+async def _disconnect_quietly(vc: discord.VoiceClient) -> None:
+    """Drop a voice connection from an unload path, where nothing can await it."""
+    with contextlib.suppress(Exception):
+        await vc.disconnect(force=True)
+
+
+def _log_task_failure(task: asyncio.Task) -> None:
+    """Surface an exception from a fire-and-forget task instead of losing it."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("MicWatch: background voice task failed", exc_info=exc)
+
+
 class MicWatch(commands.Cog):
     """Move members that keep their microphone open for too long."""
 
-    __version__ = "1.0.0"
+    __version__ = "1.1.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -165,12 +182,12 @@ class MicWatch(commands.Cog):
             guild = self.bot.get_guild(guild_id)
             vc = guild.voice_client if guild else None
             if vc is not None:
-                self.bot.loop.create_task(vc.disconnect(force=True))
+                asyncio.create_task(_disconnect_quietly(vc))
         self._joined.clear()
         self._track.clear()
         self._speak.clear()
 
-    async def red_delete_data_for_user(self, *, requester=None, user_id: int) -> None:
+    async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
         """Remove a user id from all immunity lists (end user data request)."""
         for guild in await self.config.all_guilds():
             data = await self.config.guild_from_id(guild).all()
@@ -178,6 +195,23 @@ class MicWatch(commands.Cog):
             if user_id in users:
                 users.remove(user_id)
                 await self.config.guild_from_id(guild).immune_users.set(users)
+
+    async def red_get_data_for_user(self, *, user_id: int) -> Dict[str, io.BytesIO]:
+        """Return every immunity-list entry stored for this user, as JSON."""
+        payload: Dict[str, Any] = {}
+        for guild_id in await self.config.all_guilds():
+            data = await self.config.guild_from_id(guild_id).all()
+            if user_id not in (data.get("immune_users") or []):
+                continue
+            guild = self.bot.get_guild(guild_id)
+            payload[str(guild_id)] = {
+                "guild_name": guild.name if guild is not None else None,
+                "immune_user": user_id,
+            }
+        if not payload:
+            return {}
+        blob = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        return {f"micwatch-user-{user_id}.json": io.BytesIO(blob)}
 
     # ------------------------------------------------------------------ helpers
 
@@ -401,7 +435,7 @@ class MicWatch(commands.Cog):
         self._grace_cache[guild.id] = float(conf["grace"])
         now = time.monotonic()
 
-        if not conf["enabled"]:
+        if not conf["enabled"] or await self.bot.cog_disabled_in_guild(self, guild):
             self._track.pop(guild.id, None)
             self._speak.pop(guild.id, None)
             task = self._voice_tasks.pop(guild.id, None)
@@ -699,10 +733,12 @@ class MicWatch(commands.Cog):
 
         if connecting or now < self._next_attempt.get(guild.id, 0.0):
             return
-        self._voice_tasks[guild.id] = self.bot.loop.create_task(
+        task = asyncio.create_task(
             self._connect_voice(guild, wanted, conf),
             name=f"micwatch-voice-{guild.id}",
         )
+        task.add_done_callback(_log_task_failure)
+        self._voice_tasks[guild.id] = task
 
     # ------------------------------------------------------------------ listeners
 
@@ -716,6 +752,8 @@ class MicWatch(commands.Cog):
         """React to joins/leaves and mute changes; the ticker does the counting."""
         guild = member.guild
         if guild is None:
+            return
+        if await self.bot.cog_disabled_in_guild(self, guild):
             return
         conf = await self.config.guild(guild).all()
         if not conf["enabled"] or after.channel is None:

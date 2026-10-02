@@ -15,19 +15,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
 import random
 import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import aiohttp
 import discord
 from redbot.core import Config, checks, commands
 from redbot.core.bot import Red
 from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
+from redbot.core.utils.views import SetApiView
 
 log = logging.getLogger("red.freak_cogs.kickalerts")
 
@@ -730,7 +732,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.0.0"
+    __version__ = "3.1.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -762,6 +764,10 @@ class KickAlerts(commands.Cog):
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
         """Nothing is stored per user — everything here is guild level."""
         return
+
+    async def red_get_data_for_user(self, *, user_id: int) -> Dict[str, io.BytesIO]:
+        """Nothing is stored per user — everything here is guild level."""
+        return {}
 
     def format_help_for_context(self, ctx: commands.Context) -> str:
         """Add the cog version to ``[p]help``."""
@@ -857,6 +863,8 @@ class KickAlerts(commands.Cog):
         for guild_id, data in watched.items():
             guild = self.bot.get_guild(guild_id)
             if guild is None:
+                continue
+            if await self.bot.cog_disabled_in_guild(self, guild):
                 continue
             try:
                 counts = await self._poll_guild(guild, data, channels)
@@ -1180,7 +1188,12 @@ class KickAlerts(commands.Cog):
                 "No Kick API credentials are set. Use "
                 f"`{ctx.clean_prefix}kickalert setcreds <client_id> <client_secret>` "
                 f"or `{ctx.clean_prefix}set api kick client_id,<id> "
-                "client_secret,<secret>`."
+                "client_secret,<secret>` — or press the button below to enter them "
+                "through Red's secure form (bot owner only).",
+                view=SetApiView(
+                    default_service=SHARED_API_SERVICE,
+                    default_keys={"client_id": "", "client_secret": ""},
+                ),
             )
             return
         async with ctx.typing():
@@ -1691,6 +1704,18 @@ class KickAlerts(commands.Cog):
         )
 
     # -- listeners ---------------------------------------------------------- #
+    @commands.Cog.listener()
+    async def on_red_api_tokens_update(
+        self, service_name: str, api_tokens: Mapping[str, str]
+    ) -> None:
+        """Pick up credentials set with ``[p]set api`` without a reload."""
+        if service_name != SHARED_API_SERVICE:
+            return
+        self.api.set_credentials(
+            api_tokens.get("client_id"), api_tokens.get("client_secret")
+        )
+        log.info("KickAlerts: picked up updated Kick credentials")
+
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """Drop references to a channel that was deleted."""

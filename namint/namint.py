@@ -533,6 +533,10 @@ class Naminter(commands.Cog):
         """Nothing is stored per user; lookups are not persisted anywhere."""
         return
 
+    async def red_get_data_for_user(self, *, user_id: int) -> Dict[str, io.BytesIO]:
+        """Nothing is stored per user; lookups are not persisted anywhere."""
+        return {}
+
     async def cog_check(self, ctx: commands.Context) -> bool:
         """Refuse lookups outside a server: every setting here is per guild."""
         if ctx.guild is None:

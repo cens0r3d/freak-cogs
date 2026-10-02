@@ -13,8 +13,9 @@ Facts this cog is built around:
 """
 
 import asyncio
+import io
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 import discord
 from discord.http import Route
@@ -66,6 +67,14 @@ class VCStatus(commands.Cog):
         for task in self._pending.values():
             task.cancel()
         self._pending.clear()
+
+    async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
+        """Nothing is stored per user — every setting here is guild level."""
+        return
+
+    async def red_get_data_for_user(self, *, user_id: int) -> Dict[str, io.BytesIO]:
+        """Nothing is stored per user — every setting here is guild level."""
+        return {}
 
     # ------------------------------------------------------------------
     # Commands
@@ -302,6 +311,8 @@ class VCStatus(commands.Cog):
     ) -> None:
         """Queue a status update when a human joins, leaves or moves."""
         if member.bot:
+            return
+        if await self.bot.cog_disabled_in_guild(self, member.guild):
             return
 
         left, joined = before.channel, after.channel
