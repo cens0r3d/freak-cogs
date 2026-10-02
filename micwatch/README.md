@@ -93,6 +93,9 @@ For real voice activity instead of the mute-button state:
 * `speak` mode connects to the watched channel that has members, follows them if they move to
   another watched channel, and leaves once no watched channel has anybody in it (after a short
   grace window, so channel hopping does not cause join/leave churn).
+* The bot joins **muted but not deafened** (`self_mute=True`, `self_deaf=False`): a deafened client
+  gets no audio stream from Discord, and the relayed `Speaking` frames are tied to that stream. It
+  also sends one "not speaking" frame on connect, which registers its SSRC with the gateway.
 * Connecting is single-flight and patient: 30 s timeout (Discord's UDP + websocket handshake is
   inside it), one retry every 15 s after a failure, and a client that discord.py is reconnecting on
   its own is never replaced by a second one.
@@ -103,9 +106,11 @@ For real voice activity instead of the mute-button state:
 
 | Field | Meaning |
 | --- | --- |
-| `nothing tracked` | nobody qualifies: check the "Not monitored" field, the mode and the watch list |
+| `nothing tracked` | nobody qualifies right now: check "Not monitored", "Watched channels" and the mode |
+| `Voice connection` / `Voice hook` | where the bot sits, and whether its websocket hook is still the cog's (`mine`) |
+| `Watched channels` | each watched channel with its human count; `← bot` marks the channel the bot is in — if the bot sits somewhere else, it hears nobody |
+| `Voice frames` | `<total> total, <op-5> speaking (<n> with a user id)`. Total stays at 0 while connected = the hook is not being called; speaking stays at 0 while people talk = Discord relays no speaking events to this client (wrong channel, or a deafened connection) |
 | `Not monitored` | who is skipped and why (`higher role than mine`, `immune (role)`, `rearm cooldown`, …) |
-| `Speaking frames` | op-5 frames the voice websocket relayed; `0` while people talk = Discord is not relaying to the bot (re-join the channel, check the voice connection field) |
 | `Voice retry` / `Last voice error` | a pending reconnect and why the last attempt failed |
 | `Move permission` | whether the bot has **Move Members** — without it Discord refuses every move (also logged once per server) |
 

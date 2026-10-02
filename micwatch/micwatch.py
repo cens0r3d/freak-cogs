@@ -59,6 +59,10 @@ MAX_THRESHOLD = 3600.0
 # passed to ``connect()``, so a too-small value force-disconnects a handshake that is still
 # progressing ("Voice handshake complete" is logged before the socket part). discord.py's own
 # default is 30 s; a failed attempt then gets a cool-down instead of a retry every tick.
+# A deafened client receives no audio stream from Discord, and the relayed "speaking" events are
+# tied to that stream, so the bot joins muted (never a speaker) but *not* deafened.
+VOICE_SELF_DEAF = False
+VOICE_SELF_MUTE = True
 VOICE_CONNECT_TIMEOUT = 30.0
 VOICE_RETRY_COOLDOWN = 15.0
 VOICE_LINGER = 60.0  # stay connected while no watched channel has members
@@ -129,6 +133,9 @@ class MicWatch(commands.Cog):
         self._empty_since: Dict[int, float] = {}
         self._dead_since: Dict[int, float] = {}
         # diagnostics for `[p]micwatch status`
+        self._hook_frames: Dict[int, int] = (
+            {}
+        )  # every voice websocket frame our hook saw
         self._frames: Dict[int, int] = {}  # relayed voice frames with opcode 5
         self._frames_with_user: Dict[int, int] = {}
         self._last_frame: Dict[int, float] = {}
@@ -284,15 +291,20 @@ class MicWatch(commands.Cog):
 
     def _handle_voice_payload(self, ws: Any, msg: Any) -> None:
         try:
-            if not isinstance(msg, dict) or msg.get("op") != 5:
+            if not isinstance(msg, dict):
                 return
-            data = msg.get("d") or {}
-            user_id = data.get("user_id")
             state = getattr(ws, "_connection", None)
             voice_client = getattr(state, "voice_client", None)
             guild = getattr(voice_client, "guild", None)
             if guild is None:
                 return
+            # Count every frame: heartbeat acks arrive regularly, so a non-zero total proves the
+            # hook is alive, while op-5 staying at 0 means Discord relays no speaking events.
+            self._hook_frames[guild.id] = self._hook_frames.get(guild.id, 0) + 1
+            if msg.get("op") != 5:
+                return
+            data = msg.get("d") or {}
+            user_id = data.get("user_id")
             self._frames[guild.id] = self._frames.get(guild.id, 0) + 1
             self._last_frame[guild.id] = time.monotonic()
             if user_id is None:
@@ -333,6 +345,15 @@ class MicWatch(commands.Cog):
 
         ws._hook = _hook
         ws._micwatch_hooked = True
+        _hook._micwatch = True
+        try:
+            # Registers our SSRC with the voice gateway with a "not speaking" frame. discord.py
+            # does the same when playback ends, and the gateway expects at least one such frame.
+            await ws.speak(discord.SpeakingState.none)
+        except Exception:
+            log.debug(
+                "MicWatch: could not send the initial speaking frame.", exc_info=True
+            )
         return True
 
     # ------------------------------------------------------------------ background work
@@ -497,8 +518,8 @@ class MicWatch(commands.Cog):
             await channel.connect(
                 timeout=VOICE_CONNECT_TIMEOUT,
                 reconnect=True,
-                self_deaf=True,
-                self_mute=True,
+                self_deaf=VOICE_SELF_DEAF,
+                self_mute=VOICE_SELF_MUTE,
             )
         except discord.ClientException as exc:  # another client got there first
             log.debug("MicWatch: %s already has a voice client: %s", guild, exc)
@@ -1114,14 +1135,24 @@ class MicWatch(commands.Cog):
             value=f"pynacl: {HAVE_NACL} | davey: {HAVE_DAVEY}",
         )
 
+        total = self._hook_frames.get(ctx.guild.id, 0)
         frames = self._frames.get(ctx.guild.id, 0)
         named = self._frames_with_user.get(ctx.guild.id, 0)
         last = self._last_frame.get(ctx.guild.id)
         embed.add_field(
-            name="Speaking frames",
+            name="Voice frames",
             value=(
-                f"{frames} op-5 frames, {named} with a user id"
-                + (f", last {now - last:.0f}s ago" if last else "")
+                f"{total} total, {frames} speaking ({named} with a user id)"
+                + (f", last one {now - last:.0f}s ago" if last else "")
+            ),
+        )
+        ws = getattr(vc, "ws", None) if vc is not None else None
+        hook = getattr(ws, "_hook", None)
+        hooked = bool(getattr(hook, "_micwatch", False))
+        embed.add_field(
+            name="Voice hook",
+            value=(
+                "mine" if hooked else ("foreign" if ws is not None else "no websocket")
             ),
         )
         if ctx.guild.id in self._next_attempt:
@@ -1137,6 +1168,20 @@ class MicWatch(commands.Cog):
             )
 
         watched = self._watched(conf)
+        here = getattr(vc, "channel", None) if vc is not None else None
+        overview = []
+        for channel in ctx.guild.voice_channels:
+            if watched and channel.id not in watched:
+                continue
+            humans = sum(1 for member in channel.members if not member.bot)
+            overview.append(
+                f"{channel.mention}: {humans} human(s)"
+                + (" ← bot" if channel == here else "")
+            )
+        if overview:
+            embed.add_field(
+                name="Watched channels", value="\n".join(overview)[:1024], inline=False
+            )
         blocked = []
         for channel in ctx.guild.voice_channels:
             if watched and channel.id not in watched:
