@@ -1,0 +1,35 @@
+{
+    "name": "MicWatch",
+    "author": [
+        "Hermes Agent"
+    ],
+    "description": "Move members to another voice channel when they keep their microphone open (or actually talk) for longer than a configurable threshold. Two detection modes: 'mic' (voice state, no voice connection needed) and 'speak' (voice gateway speaking events, bot has to sit in the channel).",
+    "disabled": false,
+    "end_user_data_statement": "This cog stores the user IDs of members you add to a guild's immunity list in Red's Config. Removing a member from the list or running the data-deletion request removes their ID.",
+    "hidden": false,
+    "install_msg": "Thanks for installing MicWatch! Use `[p]micwatch` to configure it. The 'mic' mode needs no extra setup; the 'speak' mode additionally needs PyNaCl in the bot's venv (`pip install pynacl`) and the bot has to sit in the watched voice channel. Required permission: **Move Members** (+ Connect for 'speak' mode).",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        8,
+        0
+    ],
+    "permissions": [
+        "move_members",
+        "connect",
+        "send_messages"
+    ],
+    "required_cogs": {},
+    "requirements": [
+        "pynacl"
+    ],
+    "short": "Move members with an open mic to another channel",
+    "tags": [
+        "voice",
+        "utility",
+        "moderation",
+        "voice-state",
+        "mic"
+    ],
+    "type": "COG"
+}
