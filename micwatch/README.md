@@ -42,7 +42,7 @@ Afterwards **restart the bot** (a cog reload is not enough): discord.py decides 
 | `toggle` | enable/disable, lists missing settings |
 | `mode [mic\|speak]` | show/set the detection mode |
 | `threshold [seconds]` | seconds before the move (default 30, 3–3600) |
-| `grace [seconds]` | `speak`: tolerated silence before the counter resets (default 2, 0–60) |
+| `grace [seconds]` | `speak`: tolerated silence before the counter resets (default 2, 0–60) — **the important knob** |
 | `rearm [seconds]` | how long a moved member is left alone (default 60, 0–3600) |
 | `target [channel\|off]` | destination channel, `off`/`clear`/`aus` clears it |
 | `watch add\|remove\|list\|clear` | monitored channels (empty = all, `mic` mode only) |
@@ -94,6 +94,21 @@ Voice connect timeouts that come and go (`Timed out connecting to voice`) are be
 Discord's voice endpoint (UDP). The cog retries with a cool-down, but a host that tunnels UDP
 through a VPN/proxy, blocks it, or has broken IPv6 will keep timing out no matter what the cog
 does.
+
+## Tuning `speak` mode
+
+Discord sends only *transitions* (`op5: 3` in a minute is normal), not a stream of updates, so
+`grace` decides how much of a normal conversation counts as continuous talking:
+
+```
+[p]micwatch threshold 20     # move after 20 s of talking instead of 30
+[p]micwatch grace 8          # pauses up to 8 s do not restart the counter
+```
+
+With the default `grace 2` a real conversation never accumulates the full threshold: every normal
+pause restarts the count. `status` shows `grace left Xs` per tracked member — if that number sits at
+`0.0s` while the state still says `talking`, the last speaking event is older than the grace window
+(some clients never send a stop event), and the count is drifting on that one signal.
 
 ## How it works
 
