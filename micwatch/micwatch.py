@@ -139,6 +139,7 @@ class MicWatch(commands.Cog):
         self._hook_frames: Dict[int, int] = (
             {}
         )  # every voice websocket frame our hook saw
+        self._frames_by_op: Dict[int, Dict[int, int]] = {}  # guild -> opcode -> count
         self._frames: Dict[int, int] = {}  # relayed voice frames with opcode 5
         self._frames_with_user: Dict[int, int] = {}
         self._last_frame: Dict[int, float] = {}
@@ -306,7 +307,10 @@ class MicWatch(commands.Cog):
             # Count every frame: heartbeat acks arrive regularly, so a non-zero total proves the
             # hook is alive, while op-5 staying at 0 means Discord relays no speaking events.
             self._hook_frames[guild.id] = self._hook_frames.get(guild.id, 0) + 1
-            if msg.get("op") != 5:
+            op = msg.get("op")
+            by_op = self._frames_by_op.setdefault(guild.id, {})
+            by_op[op] = by_op.get(op, 0) + 1
+            if op != 5:
                 return
             data = msg.get("d") or {}
             user_id = data.get("user_id")
@@ -1183,6 +1187,19 @@ class MicWatch(commands.Cog):
                 "mine" if hooked else ("foreign" if ws is not None else "no websocket")
             ),
         )
+        by_op = self._frames_by_op.get(ctx.guild.id, {})
+        if by_op:
+            embed.add_field(
+                name="Frames by opcode",
+                value=", ".join(f"op{k}: {v}" for k, v in sorted(by_op.items())),
+                inline=False,
+            )
+        own = ctx.guild.me.voice
+        if own is not None:
+            embed.add_field(
+                name="My voice state",
+                value=f"self_mute: {own.self_mute} | self_deaf: {own.self_deaf}",
+            )
         if ctx.guild.id in self._next_attempt:
             embed.add_field(
                 name="Voice retry",
