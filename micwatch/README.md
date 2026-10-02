@@ -52,6 +52,7 @@ Afterwards **restart the bot** (a cog reload is not enough): discord.py decides 
 | `ignorebots` | ignore other bots (default on, alias `bots`) |
 | `message [text]` | announcement text; `{user}` `{mention}` `{seconds}` `{channel}` |
 | `join [channel]` | pin the bot into a channel (needed for `speak`) |
+| `dave` | experimental: switch the DAVE/E2EE voice session off for new connections |
 | `leave` | disconnect / drop the pin |
 | `settings` | configuration overview (aliases `show`, `config`) |
 | `status` | live view: tracked members + elapsed seconds (alias `debug`) |
@@ -75,6 +76,24 @@ For real voice activity instead of the mute-button state:
 [p]micwatch watch add #lobby     # required in this mode
 [p]micwatch toggle
 ```
+
+### Green ring arrives as nothing
+
+If the bot is connected to the right channel, `Voice hook: mine`, but `Voice frames` shows only
+`op6` (heartbeats) while people talk, Discord is relaying no media state to that session. Two
+things to try, in that order:
+
+1. **`[p]micwatch dave`** (then `leave` + `join`) — advertises "no E2EE" for the voice session.
+   Bots have been reported to stay connected with DAVE enabled but receive no media at all. The
+   switch is process-wide (other cogs' new voice connections too) and needs a fresh connection.
+2. **`[p]micwatch mode mic`** — no voice connection at all. It reads the mute button instead of
+   voice activity, which for everyone not using push-to-talk is the same thing in practice, and
+   works no matter what Discord does or does not relay.
+
+Voice connect timeouts that come and go (`Timed out connecting to voice`) are between the host and
+Discord's voice endpoint (UDP). The cog retries with a cool-down, but a host that tunnels UDP
+through a VPN/proxy, blocks it, or has broken IPv6 will keep timing out no matter what the cog
+does.
 
 ## How it works
 
@@ -112,5 +131,6 @@ For real voice activity instead of the mute-button state:
 | `Voice frames` | `<total> total, <op-5> speaking (<n> with a user id)`. Total stays at 0 while connected = the hook is not being called; speaking stays at 0 while people talk = Discord relays no speaking events to this client (wrong channel, or a deafened connection) |
 | `Not monitored` | who is skipped and why (`higher role than mine`, `immune (role)`, `rearm cooldown`, …) |
 | `Voice retry` / `Last voice error` | a pending reconnect and why the last attempt failed |
+| `Frames by opcode` / `My voice state` | which voice-gateway opcodes actually arrive (only `op6` = heartbeats means Discord relays nothing to this session) and the mute/deafen state the server sees |
 | `Move permission` | whether the bot has **Move Members** — without it Discord refuses every move (also logged once per server) |
 

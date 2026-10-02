@@ -47,6 +47,11 @@ except Exception:  # pragma: no cover - depends on the environment
 # Discord.py raises "…library needed in order to use voice" for either one missing, and the flags
 # are frozen at import time - so a bot that installed them later needs a full restart, not a reload.
 VOICE_READY = HAVE_NACL and HAVE_DAVEY
+
+# discord.py advertises davey.DAVE_PROTOCOL_VERSION when it opens a voice connection, and Discord
+# then runs the session end-to-end encrypted. Bots have been reported to stay connected but receive
+# no media at all in such sessions, so `[p]micwatch dave` can advertise version 0 instead.
+_DAVE_ORIGINAL = None
 VOICE_HINT = 'pip install -U "Red-DiscordBot[voice]"  (or: [p]pipinstall pynacl>=1.5.0,<1.6 davey)'
 
 log = logging.getLogger("red.freak_cogs.micwatch")
@@ -86,6 +91,7 @@ DEFAULT_GUILD = {
     "immune_users": [],
     "ignore_bots": True,
     "notify": True,
+    "dave": True,
     "message": DEFAULT_MESSAGE,
     "reason": "Kept microphone open for too long",
 }
@@ -536,11 +542,31 @@ class MicWatch(commands.Cog):
                 best, best_count = channel, count
         return best
 
+    def _apply_dave_setting(self, wanted: bool) -> None:
+        """Advertise (or not) the DAVE/E2EE voice session for connections opened from here on."""
+        global _DAVE_ORIGINAL
+        try:
+            import davey
+        except Exception:
+            return
+        version = getattr(davey, "DAVE_PROTOCOL_VERSION", None)
+        if version is None:
+            return
+        if wanted:
+            if _DAVE_ORIGINAL is not None:
+                davey.DAVE_PROTOCOL_VERSION = _DAVE_ORIGINAL
+                _DAVE_ORIGINAL = None
+            return
+        if _DAVE_ORIGINAL is None:
+            _DAVE_ORIGINAL = version
+        davey.DAVE_PROTOCOL_VERSION = 0
+
     async def _connect_voice(
-        self, guild: discord.Guild, channel: discord.VoiceChannel
+        self, guild: discord.Guild, channel: discord.VoiceChannel, conf: dict
     ) -> bool:
         """Connect once, and remember the failure plus a cool-down instead of retrying every tick."""
         now = time.monotonic()
+        self._apply_dave_setting(bool(conf.get("dave", True)))
         try:
             await channel.connect(
                 timeout=VOICE_CONNECT_TIMEOUT,
@@ -667,7 +693,7 @@ class MicWatch(commands.Cog):
         if connecting or now < self._next_attempt.get(guild.id, 0.0):
             return
         self._voice_tasks[guild.id] = self.bot.loop.create_task(
-            self._connect_voice(guild, wanted),
+            self._connect_voice(guild, wanted, conf),
             name=f"micwatch-voice-{guild.id}",
         )
 
@@ -1021,6 +1047,7 @@ class MicWatch(commands.Cog):
             await ctx.send("Give a voice channel or join one yourself.")
             return
         self._manual[ctx.guild.id] = channel.id
+        conf = await self.config.guild(ctx.guild).all()
         current = ctx.guild.voice_client
         if current is not None:
             if not current.is_connected():
@@ -1045,7 +1072,7 @@ class MicWatch(commands.Cog):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        if await self._connect_voice(ctx.guild, channel):
+        if await self._connect_voice(ctx.guild, channel, conf):
             await self._install_hook(ctx.guild)
             await ctx.send(
                 f"Joined {channel.mention} — pinned until `{ctx.clean_prefix}micwatch leave`."
@@ -1070,6 +1097,27 @@ class MicWatch(commands.Cog):
             return
         await self._leave_voice(ctx.guild, reason="asked to leave")
         await ctx.send("Disconnected.")
+
+    @micwatch.command(name="dave")
+    async def mw_dave(self, ctx: commands.Context) -> None:
+        """Experimental: toggle the DAVE/E2EE voice session (needs a fresh voice connection)."""
+        new = not await self.config.guild(ctx.guild).dave()
+        await self.config.guild(ctx.guild).dave.set(new)
+        if new:
+            self._apply_dave_setting(True)
+            await ctx.send(
+                "DAVE/E2EE sessions are **on** again (discord.py default). "
+                f"Rejoin so it takes effect: `{ctx.clean_prefix}micwatch leave` then `join`."
+            )
+            return
+        self._apply_dave_setting(False)
+        await ctx.send(
+            "DAVE/E2EE sessions are now **off** for voice connections opened from here on — this is "
+            "a diagnostic: some bots stay connected in E2EE sessions but receive no media or "
+            "speaking events at all. It affects the whole process (other cogs' voice connections "
+            "too), and only new connections: "
+            f"`{ctx.clean_prefix}micwatch leave` then `{ctx.clean_prefix}micwatch join`."
+        )
 
     @micwatch.command(name="settings", aliases=["show", "config"])
     async def mw_settings(self, ctx: commands.Context) -> None:
@@ -1166,6 +1214,7 @@ class MicWatch(commands.Cog):
             name="Voice libraries",
             value=f"pynacl: {HAVE_NACL} | davey: {HAVE_DAVEY}",
         )
+        embed.add_field(name="DAVE/E2EE", value=str(conf.get("dave", True)))
 
         total = self._hook_frames.get(ctx.guild.id, 0)
         frames = self._frames.get(ctx.guild.id, 0)
@@ -1246,6 +1295,7 @@ class MicWatch(commands.Cog):
     @micwatch.command(name="reset")
     async def mw_reset(self, ctx: commands.Context) -> None:
         """Reset every setting of this server to the defaults."""
+        self._apply_dave_setting(True)
         await self.config.guild(ctx.guild).clear()
         self._track.pop(ctx.guild.id, None)
         self._speak.pop(ctx.guild.id, None)
