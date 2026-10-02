@@ -232,7 +232,7 @@ Notes:
 - **vcstatus** — the bot needs the **Set Voice Channel Status** permission, plus **Manage Channels** while it is not connected to that channel.
 - **kickalerts** — needs OAuth2 app credentials from https://kick.com/settings/developer. Store them with `[p]kickalert setcreds <client_id> <client_secret>` (or `[p]set api kick client_id,<id> client_secret,<secret>`) and verify with `[p]kickalert authstatus`. The bot needs **View Channel**, **Send Messages** and **Embed Links** in the alert channel.
 - **voicesay** — needs **ffmpeg** and **ffprobe** on the host to convert audio that is not already OGG Opus.
-- **micwatch** — needs the **Move Members** permission (plus **Connect** for `speak` mode). `speak` mode additionally needs PyNaCl in the bot venv: `pip install pynacl`, then `[p]reload micwatch`.
+- **micwatch** — needs the **Move Members** permission (plus **Connect** for `speak` mode). `speak` mode additionally needs voice support in the bot venv: `pip install -U "Red-DiscordBot[voice]"` (or `[p]pipinstall pynacl davey`), then `[p]reload micwatch`. `pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session discord.py 2.6+ negotiates.
 - **naminter** — nothing to configure, but `[p]cog install` pulls the `naminter` package (curl-cffi, orjson, jsonschema plus the upstream CLI extras: rich, uvloop, weasyprint), so the install step takes noticeably longer than the other cogs. Python 3.11 or newer is required, and the host needs outbound HTTPS to `raw.githubusercontent.com` and to the sites being checked.
 
 ## Requirements
