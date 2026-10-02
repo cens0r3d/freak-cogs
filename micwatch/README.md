@@ -31,7 +31,9 @@ pip install -U "Red-DiscordBot[voice]"        # pynacl + davey
 # or, on a running bot:  [p]pipinstall pynacl davey
 ```
 
-`pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session that discord.py 2.6+ negotiates.
+`pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session that discord.py 2.6+ negotiates — since 2.6/2.7 discord.py refuses to build a `VoiceClient` when either one is missing.
+
+Afterwards **restart the bot** (a cog reload is not enough): discord.py decides at import time whether voice is available, so a freshly installed library is invisible to the running process.
 
 ## Commands (`[p]micwatch`, aliases `micmon`, `mwatch`)
 

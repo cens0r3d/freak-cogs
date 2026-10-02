@@ -30,12 +30,24 @@ from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import bold, humanize_list, inline
 
-try:  # only needed for the "speak" mode (joining voice at all requires PyNaCl)
+try:  # voice transport encryption, needed to create a VoiceClient at all
     import nacl  # noqa: F401
 
     HAVE_NACL = True
 except Exception:  # pragma: no cover - depends on the environment
     HAVE_NACL = False
+
+try:  # discord.py 2.6+ also requires davey (DAVE/E2EE voice session)
+    import davey  # noqa: F401
+
+    HAVE_DAVEY = True
+except Exception:  # pragma: no cover - depends on the environment
+    HAVE_DAVEY = False
+
+# Discord.py raises "…library needed in order to use voice" for either one missing, and the flags
+# are frozen at import time - so a bot that installed them later needs a full restart, not a reload.
+VOICE_READY = HAVE_NACL and HAVE_DAVEY
+VOICE_HINT = 'pip install -U "Red-DiscordBot[voice]"  (or: [p]pipinstall pynacl>=1.5.0,<1.6 davey)'
 
 log = logging.getLogger("red.freak_cogs.micwatch")
 
@@ -444,7 +456,7 @@ class MicWatch(commands.Cog):
     async def _sync_voice_connection(
         self, guild: discord.Guild, conf: dict, watched: Set[int]
     ) -> None:
-        if not HAVE_NACL:
+        if not VOICE_READY:
             return
         wanted = self._wanted_channel(guild, conf, watched)
         vc = guild.voice_client
@@ -563,10 +575,8 @@ class MicWatch(commands.Cog):
                 notes.append(
                     "`speak` mode watches specific channels only — add them with `watch add`."
                 )
-            if not HAVE_NACL:
-                notes.append(
-                    "PyNaCl is not installed in the bot venv (`pip install pynacl`)."
-                )
+            if not VOICE_READY:
+                notes.append(f"Voice libraries missing — {VOICE_HINT}.")
         await ctx.send(
             f"Mode set to {inline(mode)}."
             + ("\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
@@ -810,9 +820,15 @@ class MicWatch(commands.Cog):
         self, ctx: commands.Context, channel: Optional[discord.VoiceChannel] = None
     ) -> None:
         """Make the bot sit in a channel (required for `speak` mode)."""
-        if not HAVE_NACL:
+        if not VOICE_READY:
+            missing = ", ".join(
+                name
+                for name, ok in (("pynacl", HAVE_NACL), ("davey", HAVE_DAVEY))
+                if not ok
+            )
             await ctx.send(
-                "PyNaCl is missing in the bot venv — `pip install pynacl`, then reload the cog."
+                f"Voice libraries missing ({missing}) — {VOICE_HINT}. Afterwards **restart** the "
+                "bot: discord.py decides at import time whether voice is available."
             )
             return
         channel = channel or (ctx.author.voice.channel if ctx.author.voice else None)
@@ -937,7 +953,10 @@ class MicWatch(commands.Cog):
             name="Move permission",
             value=str(ctx.guild.me.guild_permissions.move_members),
         )
-        embed.add_field(name="PyNaCl", value=str(HAVE_NACL))
+        embed.add_field(
+            name="Voice libraries",
+            value=f"pynacl: {HAVE_NACL} | davey: {HAVE_DAVEY}",
+        )
         await ctx.send(embed=embed)
 
     @micwatch.command(name="reset")
@@ -972,8 +991,6 @@ class MicWatch(commands.Cog):
                 problems.append(
                     "`speak` mode needs an explicit watch list (`watch add #channel`)."
                 )
-            if not HAVE_NACL:
-                problems.append(
-                    "PyNaCl is missing in the bot venv (`pip install pynacl`)."
-                )
+            if not VOICE_READY:
+                problems.append(f"Voice libraries missing — {VOICE_HINT}.")
         return problems
