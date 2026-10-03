@@ -552,6 +552,14 @@ class MicWatch(commands.Cog):
                 if member is None or not self._eligible(member, conf, watched):
                     speaks.pop(member_id, None)
                     continue
+                voice = member.voice
+                if voice is not None and (voice.self_mute or voice.mute):
+                    # The microphone is off, so a burst still flagged as "talking" is stale:
+                    # Discord only relays transitions, and some clients never send the op-5
+                    # stop event. Without this check the counter keeps running on that one
+                    # old signal and moves somebody who stopped talking long ago.
+                    speaks.pop(member_id, None)
+                    continue
                 end = burst["end"]
                 if not burst["talking"] and (end is None or now - end > grace):
                     speaks.pop(member_id, None)
