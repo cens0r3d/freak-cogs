@@ -85,6 +85,7 @@ DEFAULT_GUILD = {
     "mode": "mic",  # "mic" | "speak"
     "threshold": 30.0,  # seconds
     "grace": 2.0,  # "speak" mode: tolerated silence before the counter resets
+    "hold": 0.0,  # "speak" mode: trust one speaking signal this long at most (0 = until a stop event)
     "rearm": 60.0,  # seconds before the same member can be moved again
     "reset_on_mute": True,  # "mic" mode: mute resets instead of pausing the counter
     "watch_channels": [],  # [] = all voice channels (only possible in "mic" mode)
@@ -573,6 +574,15 @@ class MicWatch(commands.Cog):
                     # old signal and moves somebody who stopped talking long ago.
                     speaks.pop(member_id, None)
                     continue
+                hold = float(conf.get("hold") or 0.0)
+                if burst["talking"] and hold > 0 and now - burst["last"] > hold:
+                    # Discord only relays transitions, so a client that never sends the op-5
+                    # stop event leaves the burst flagged as talking for ever: two seconds of
+                    # speech then count all the way up to the threshold and the member is moved
+                    # long after they stopped. Past `hold` seconds without a new event the
+                    # burst counts as ended at its last event.
+                    burst["talking"] = False
+                    burst["end"] = burst["last"]
                 end = burst["end"]
                 if not burst["talking"] and (end is None or now - end > grace):
                     speaks.pop(member_id, None)
@@ -905,6 +915,33 @@ class MicWatch(commands.Cog):
         self._grace_cache[ctx.guild.id] = float(seconds)
         await ctx.send(f"Grace set to {inline(f'{seconds:g}s')}.")
 
+    @micwatch.command(name="hold")
+    async def mw_hold(
+        self, ctx: commands.Context, seconds: Optional[float] = None
+    ) -> None:
+        """`speak` mode: how long one speaking signal is trusted without a new event.
+
+        Discord relays only *transitions*, so a client that never sends the stop
+        event leaves the counter running on a single old signal: two seconds of
+        speech then count up to the threshold and the member is moved long after
+        they stopped. With a `hold` window a signal older than this counts as
+        ended. `0` (default) trusts the signal until a stop event arrives.
+        """
+        if seconds is None:
+            current = await self.config.guild(ctx.guild).hold()
+            await ctx.send(f"Hold: {inline(f'{current:g}s')}")
+            return
+        if not 0 <= seconds <= MAX_THRESHOLD:
+            await ctx.send(f"Give a value between 0 and {MAX_THRESHOLD:g} seconds.")
+            return
+        await self.config.guild(ctx.guild).hold.set(float(seconds))
+        note = (
+            ""
+            if seconds
+            else " A speaking signal is now trusted until its stop event arrives."
+        )
+        await ctx.send(f"Hold set to {inline(f'{seconds:g}s')}.{note}")
+
     @micwatch.command(name="rearm")
     async def mw_rearm(
         self, ctx: commands.Context, seconds: Optional[float] = None
@@ -1227,6 +1264,7 @@ class MicWatch(commands.Cog):
         embed.add_field(name="Mode", value=conf["mode"])
         embed.add_field(name="Threshold", value=f"{conf['threshold']:g}s")
         embed.add_field(name="Grace", value=f"{conf['grace']:g}s")
+        embed.add_field(name="Hold", value=f"{conf.get('hold') or 0.0:g}s")
         embed.add_field(name="Rearm", value=f"{conf['rearm']:g}s")
         embed.add_field(name="Target", value=target.mention if target else "not set")
         embed.add_field(name="Watched", value=watched_text, inline=False)

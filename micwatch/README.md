@@ -43,6 +43,7 @@ Afterwards **restart the bot** (a cog reload is not enough): discord.py decides 
 | `mode [mic\|speak]` | show/set the detection mode |
 | `threshold [seconds]` | seconds before the move (default 30, 3–3600) |
 | `grace [seconds]` | `speak`: tolerated silence before the counter resets (default 2, 0–60) — **the important knob** |
+| `hold [seconds]` | `speak`: how long one speaking signal is trusted without a new event (default 0 = until the stop event arrives) |
 | `rearm [seconds]` | how long a moved member is left alone (default 60, 0–3600) |
 | `target [channel\|off]` | destination channel, `off`/`clear`/`aus` clears it |
 | `watch add\|remove\|list\|clear` | monitored channels (empty = all, `mic` mode only) |
@@ -109,6 +110,12 @@ With the default `grace 2` a real conversation never accumulates the full thresh
 pause restarts the count. `status` shows `grace left Xs` per tracked member — if that number sits at
 `0.0s` while the state still says `talking`, the last speaking event is older than the grace window
 (some clients never send a stop event), and the count is drifting on that one signal.
+
+That drift is what `hold` is for: a client that never sends the stop event leaves the counter running
+on one old signal, so two seconds of speech still count up to the threshold and the member is moved
+long after they stopped. With `hold 5` a signal older than five seconds counts as ended. Set it above
+the interval at which your members' clients keep reporting while they talk — ``status`` shows how
+chatty they actually are (`Voice frames`, `Frames by opcode`).
 
 ## How it works
 
