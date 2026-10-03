@@ -550,6 +550,19 @@ class MicWatch(commands.Cog):
             for member_id, burst in list(speaks.items()):
                 member = guild.get_member(member_id)
                 if member is None or not self._eligible(member, conf, watched):
+                    # Somebody who is only inside the rearm window must be left alone, but
+                    # their burst has to survive: they are most likely still talking, and
+                    # talking on sends no new op-5 start event. Restart the clock instead of
+                    # dropping the burst, otherwise the member is lost until their next
+                    # start/stop - which never comes while they keep talking.
+                    if (
+                        member is not None
+                        and self._skip_reason(member, conf, watched) == "rearm cooldown"
+                    ):
+                        burst["start"] = now
+                        if not burst["talking"]:
+                            burst["end"] = now
+                        continue
                     speaks.pop(member_id, None)
                     continue
                 voice = member.voice
@@ -771,7 +784,20 @@ class MicWatch(commands.Cog):
 
         if conf["mode"] == "speak":
             if before.channel != after.channel:
-                self._forget(guild.id, member.id)
+                # Do NOT drop the burst here. A member who is already talking when they join
+                # sends no new op-5 start event, so dropping it lost them until their next
+                # start/stop - which is why a moved member was "never tracked again" after
+                # rejoining. Restart the clock instead and let the burst live on.
+                now = time.monotonic()
+                burst = self._speak.get(guild.id, {}).get(member.id)
+                if burst is None:
+                    self._forget(guild.id, member.id)
+                else:
+                    burst["start"] = now
+                    if burst["talking"]:
+                        burst["end"] = None
+                    else:
+                        burst["end"] = now
             return
 
         if not self._eligible(member, conf, watched):
