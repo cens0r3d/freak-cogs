@@ -37,8 +37,17 @@ EXPORT_FORMATS: Tuple[Tuple[str, str, str], ...] = (
 
 #: Which results an export can contain: value -> (modal label, description).
 EXPORT_SCOPES: Tuple[Tuple[str, str, str], ...] = (
-    ("found", "Hits only", "Found, partial and ambiguous"),
-    ("everything", "Everything", "Also misses, unknown and errors"),
+    (
+        "certain",
+        "Certain hits",
+        "Only results where the success text and the status code agreed",
+    ),
+    (
+        "found",
+        "Hits and candidates",
+        "Also the ones where only one of the two signals matched",
+    ),
+    ("everything", "Everything", "Also misses, unknowns and errors"),
 )
 
 
@@ -90,10 +99,47 @@ WMNStatus = _lib_models.WMNStatus
 
 log = logging.getLogger("red.freak_cogs.namint")
 
-#: Statuses that count as "the account exists".
-FOUND_STATUSES: frozenset = frozenset(
-    {WMNStatus.EXISTS, WMNStatus.PARTIAL_EXISTS, WMNStatus.CONFLICTING}
+#: Statuses that are a hit on their own: the entry's success *text* was on the
+#: page and the status code agreed with it.
+FOUND_STATUSES: frozenset = frozenset({WMNStatus.EXISTS})
+
+#: Statuses where only one of the two detection signals matched, so the result is
+#: a candidate at best. The library reports ``PARTIAL_EXISTS`` when the status
+#: code matched but the expected text did not, and ``CONFLICTING`` when both the
+#: success and the missing signal were present.
+UNSURE_STATUSES: frozenset = frozenset(
+    {WMNStatus.PARTIAL_EXISTS, WMNStatus.CONFLICTING}
 )
+
+#: Which of an entry's signals matched, shown per result and in the export.
+MATCH_TEXT_AND_CODE = "text+code"
+MATCH_TEXT_ONLY = "text only"
+MATCH_CODE_ONLY = "code only"
+MATCH_BOTH = "both signals"
+
+
+def match_kind(result: Any, site: Optional[Dict[str, Any]]) -> str:
+    """Return which of an entry's two detection signals actually matched.
+
+    ``PARTIAL_EXISTS`` means exactly one of them did, and the status code says
+    which: if it equals the entry's ``e_code`` then the *code* matched and the
+    success text was absent. That is the shape of a dead profile link on a site
+    which answers 200 for every username - measured over the whole dataset it was
+    the cause of 40 of 43 false positives, while the opposite case (success text
+    present, code differed) is a plausible real hit.
+    """
+    status = result.status
+    if status == WMNStatus.EXISTS:
+        return MATCH_TEXT_AND_CODE
+    if status == WMNStatus.CONFLICTING:
+        return MATCH_BOTH
+    if status != WMNStatus.PARTIAL_EXISTS or site is None:
+        return ""
+    e_code = site.get("e_code")
+    if e_code is not None and result.status_code == e_code:
+        return MATCH_CODE_ONLY
+    return MATCH_TEXT_ONLY
+
 
 #: How long a downloaded dataset is considered fresh, in seconds.
 DATA_TTL = 6 * 60 * 60
@@ -165,7 +211,11 @@ HELP_TEXT = (
     "`-m`, `--mode all|any` — strict (AND) or loose (OR) detection\n"
     "`-l`, `--limit <n>` — check at most n sites\n"
     "`-e`, `--export json|csv|txt` — attach the report right away\n"
-    "`-a`, `--all` — also list misses, unknowns and errors\n\n"
+    "`-a`, `--all` — also list misses, unsure results and errors\n"
+    "`--strict` — only hits where the success text and the status code agreed\n\n"
+    "Results where only the status code matched — the shape of a dead profile "
+    "link on a site that answers 200 for every username — are marked `unsure` "
+    "and left out of the default list. `--all` shows them again.\n\n"
     "After a run, the **Export** button under the summary asks for format and "
     "scope and sends the file only to you.\n\n"
     "Access: everyone by default; server managers can limit it to roles with "
@@ -189,6 +239,7 @@ class CheckArgs:
     limit: Optional[int] = None
     export: Optional[str] = None
     show_all: bool = False
+    strict: bool = False
 
 
 def _can_lookup():
@@ -253,7 +304,12 @@ async def deliver_export(
     seconds Discord allows for the first response, so the interaction is
     acknowledged with ``defer()`` first and the file follows as a followup.
     """
-    results = export_view.results if scope == "everything" else export_view.found
+    if scope == "everything":
+        results = export_view.results
+    elif scope == "found":
+        results = export_view.found
+    else:
+        results = export_view.certain
     await interaction.response.defer(ephemeral=True, thinking=True)
     try:
         payload, filename = export_view.cog._build_export(
@@ -403,6 +459,7 @@ class ExportView(discord.ui.View):
         usernames: Sequence[str] = (),
         results: Optional[Sequence[Any]] = None,
         found: Sequence[Any] = (),
+        certain: Sequence[Any] = (),
         counts: Optional[Dict[str, int]] = None,
         sites_checked: int = 0,
         timeout: Optional[int] = 600,
@@ -413,6 +470,7 @@ class ExportView(discord.ui.View):
         self.usernames = list(usernames)
         self.results = None if results is None else list(results)
         self.found = list(found)
+        self.certain = list(certain)
         self.counts = dict(counts or {})
         self.sites_checked = sites_checked
 
@@ -492,6 +550,9 @@ class Naminter(commands.Cog):
         self.config.register_guild(**DEFAULT_GUILD)
 
         self._data: Optional[Dict[str, Any]] = None
+        #: site name -> WMN entry, for the post-run classification that needs
+        #: ``e_code`` (the library does not report which signal matched).
+        self._site_index: Dict[str, Any] = {}
         self._data_stamp: float = 0.0
         self._loaded_at: Optional[float] = None
         self._data_source: str = "not loaded"
@@ -591,6 +652,11 @@ class Naminter(commands.Cog):
                 raise ValueError("The WhatsMyName dataset did not contain any sites.")
 
             self._data = data
+            self._site_index = {
+                entry["name"]: entry
+                for entry in data["sites"]
+                if isinstance(entry, dict) and entry.get("name")
+            }
             self._loaded_at = time.time()
             self._data_stamp = self._loaded_at
             self._data_source = source
@@ -807,7 +873,7 @@ class Naminter(commands.Cog):
             "-e": "export",
             "--export": "export",
         }
-        bools = {"-a": "show_all", "--all": "show_all"}
+        bools = {"-a": "show_all", "--all": "show_all", "--strict": "strict"}
 
         args = CheckArgs()
         index = 0
@@ -868,8 +934,37 @@ class Naminter(commands.Cog):
     # rendering helpers
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _status_line(result: Any, *, with_username: bool = False) -> str:
+    def _match_kind(self, result: Any) -> str:
+        """``match_kind`` for a result, resolved against the loaded dataset."""
+        return match_kind(result, self._site_index.get(result.name))
+
+    def _select_displayed(
+        self, results: Sequence[Any], *, show_all: bool, strict: bool
+    ) -> List[Any]:
+        """The results the list shows for the given flags.
+
+        ``show_all`` is everything except the invalid entries. ``strict`` reduces
+        the list to certain hits. The default keeps the candidates whose success
+        *text* was on the page and drops the ones that matched by status code
+        alone: on a site that answers 200 for every username that is the
+        dead-profile-link pattern, and it was 40 of 43 false positives in a
+        measured run over all 717 entries.
+        """
+        if show_all:
+            return [item for item in results if item.status != WMNStatus.NOT_VALID]
+        if strict:
+            return [item for item in results if item.status in FOUND_STATUSES]
+        return [
+            item
+            for item in results
+            if item.status in FOUND_STATUSES
+            or (
+                item.status in UNSURE_STATUSES
+                and self._match_kind(item) != MATCH_CODE_ONLY
+            )
+        ]
+
+    def _status_line(self, result: Any, *, with_username: bool = False) -> str:
         """One markdown line for a single enumeration result."""
         emoji = STATUS_EMOJI.get(result.status, "❔")
         label = STATUS_LABEL.get(result.status, str(result.status))
@@ -881,6 +976,11 @@ class Naminter(commands.Cog):
         details = [f"`{result.category}`"]
         if result.status not in (WMNStatus.EXISTS, WMNStatus.MISSING):
             details.append(label)
+        kind = self._match_kind(result)
+        if kind == MATCH_CODE_ONLY:
+            details.append("only the status code matched — likely a dead link")
+        elif kind == MATCH_BOTH:
+            details.append("both signals present — verify by hand")
         if with_username:
             details.append(f"`{result.username}`")
         return f"{line} · {' · '.join(details)}"
@@ -931,6 +1031,7 @@ class Naminter(commands.Cog):
         duration: float,
         mode: str,
         timed_out: bool,
+        code_only: int = 0,
     ) -> discord.Embed:
         """Header embed describing what was checked and what came back."""
         embed = discord.Embed(
@@ -950,12 +1051,18 @@ class Naminter(commands.Cog):
         embed.add_field(name="Duration", value=f"{duration:.1f}s", inline=True)
 
         found = sum(counts.get(status.value, 0) for status in FOUND_STATUSES)
-        lines = [f"✅ **{found}** found"]
+        lines = [f"✅ **{found}** found (success text and status code agreed)"]
+        unsure = sum(counts.get(status.value, 0) for status in UNSURE_STATUSES)
+        if unsure:
+            detail = (
+                f" — of those {code_only} matched by status code only"
+                if code_only
+                else ""
+            )
+            lines.append(f"🟡 {unsure} unsure, only one signal matched{detail}")
         extra = [
             (status, counts.get(status.value, 0))
             for status in (
-                WMNStatus.PARTIAL_EXISTS,
-                WMNStatus.CONFLICTING,
                 WMNStatus.MISSING,
                 WMNStatus.PARTIAL_MISSING,
                 WMNStatus.UNKNOWN,
@@ -980,8 +1087,8 @@ class Naminter(commands.Cog):
         embed.set_footer(text=f"Dataset source: {self._data_source}")
         return embed
 
-    @staticmethod
     def _build_export(
+        self,
         fmt: str,
         *,
         results: Sequence[Any],
@@ -997,6 +1104,7 @@ class Naminter(commands.Cog):
                 "category": item.category,
                 "username": item.username,
                 "status": item.status.value,
+                "match": self._match_kind(item),
                 "url": item.uri_pretty or item.uri_check,
                 "status_code": item.status_code,
                 "elapsed_ms": (
@@ -1036,6 +1144,7 @@ class Naminter(commands.Cog):
                 lines.append(
                     f"[{item['status']}] {item['username']} @ {item['site']} "
                     f"({item['category']}) {item['url'] or ''}"
+                    + (f" match={item['match']}" if item["match"] else "")
                     + (f" err={item['error']}" if item["error"] else "")
                 )
             body = "\n".join(lines)
@@ -1152,13 +1261,15 @@ class Naminter(commands.Cog):
         duration = time.monotonic() - started
 
         counts: Dict[str, int] = {}
+        code_only = 0
         for item in results:
             counts[item.status.value] = counts.get(item.status.value, 0) + 1
+            if self._match_kind(item) == MATCH_CODE_ONLY:
+                code_only += 1
 
-        if show_missing:
-            displayed = [item for item in results if item.status != WMNStatus.NOT_VALID]
-        else:
-            displayed = [item for item in results if item.status in FOUND_STATUSES]
+        displayed = self._select_displayed(
+            results, show_all=show_missing, strict=args.strict
+        )
         displayed.sort(key=lambda item: (item.username, item.name.lower()))
 
         header = self._summary_embed(
@@ -1169,6 +1280,7 @@ class Naminter(commands.Cog):
             duration=duration,
             mode=mode_name,
             timed_out=timed_out,
+            code_only=code_only,
         )
         pages, not_shown = self._result_pages(
             displayed,
@@ -1193,7 +1305,12 @@ class Naminter(commands.Cog):
             author=ctx.author,
             usernames=args.usernames,
             results=results,
-            found=[item for item in results if item.status in FOUND_STATUSES],
+            certain=[item for item in results if item.status in FOUND_STATUSES],
+            found=[
+                item
+                for item in results
+                if item.status in FOUND_STATUSES or item.status in UNSURE_STATUSES
+            ],
             counts=counts,
             sites_checked=len(site_names),
         )
@@ -1226,11 +1343,15 @@ class Naminter(commands.Cog):
         if pages:
             await menu(ctx, pages, DEFAULT_CONTROLS, timeout=180)
         elif not displayed:
-            note = (
-                "No hits — but the full run is in the export."
-                if args.export
-                else "No hits. Add `--all` to see misses and errors."
-            )
+            if args.export:
+                note = "No hits — but the full run is in the export."
+            elif args.strict:
+                note = (
+                    "No certain hits. Drop `--strict` for candidates, or add "
+                    "`--all` for everything else."
+                )
+            else:
+                note = "No hits. Add `--all` to see misses, unsure results and errors."
             await ctx.send(note, allowed_mentions=mentions)
 
     def _export_view(
@@ -1242,6 +1363,7 @@ class Naminter(commands.Cog):
         found: Sequence[Any],
         counts: Dict[str, int],
         sites_checked: int,
+        certain: Sequence[Any] = (),
     ) -> ExportView:
         """Build the view that carries the run's results behind an export button."""
         return ExportView(
@@ -1250,6 +1372,7 @@ class Naminter(commands.Cog):
             usernames=usernames,
             results=results,
             found=found,
+            certain=certain,
             counts=counts,
             sites_checked=sites_checked,
         )

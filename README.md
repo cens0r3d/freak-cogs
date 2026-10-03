@@ -166,10 +166,11 @@ Options of `check`:
 -m, --mode all|any       detection mode for this run
 -l, --limit <n>          check at most n sites
 -e, --export json|csv|txt  attach the full report as a file
--a, --all                also list misses, unknowns and errors
+-a, --all                also list misses, unsure results and errors
+--strict                 only hits where the success text and the status code agreed
 ```
 
-Under the summary of every lookup there is an **Export** button. Pressing it opens a small form that asks for the format (`JSON`, `CSV`, `TXT`) and the scope (*hits only* or *everything*, i.e. including misses, unknown and errors), and replies with the file **ephemerally** — only the person who started the lookup sees it, nothing is posted to the channel. If the API refuses the modal (selects in a modal need components-v2 support), the same two choices appear as a picker message with a **Send file** button instead. The button carries that run's results and stops working after ten minutes or a bot restart, and then tells you so; `--export` stays the non-interactive path for scripts.
+Under the summary of every lookup there is an **Export** button. Pressing it opens a small form that asks for the format (`JSON`, `CSV`, `TXT`) and the scope — *certain hits*, *hits and candidates*, or *everything* (including misses, unknown and errors) — and replies with the file **ephemerally** — only the person who started the lookup sees it, nothing is posted to the channel. If the API refuses the modal (selects in a modal need components-v2 support), the same three choices appear as a picker message with a **Send file** button instead. The button carries that run's results and stops working after ten minutes or a bot restart, and then tells you so; `--export` stays the non-interactive path for scripts.
 
 Notes:
 
@@ -177,8 +178,9 @@ Notes:
 - The dataset (~1 MB JSON) is downloaded in the background on load, cached on disk and refreshed after 6 hours; `[p]naminter refresh` forces it.
 - Requests are made with browser impersonation (curl-cffi) from the bot's host, so its IP is visible to the sites being checked.
 - Only the queried username leaves the host; nothing about it is stored. Hits are not cached or logged.
+- **Hits are split by what actually matched.** The dataset gives each site a status code *and* a text string that a real profile has to contain. A site that answers `200` for every username — most do — is only caught by the second half, so when a site changes its markup you get a result where the *status code* matched and the success text was absent. Those are marked `🟡 unsure … only the status code matched — likely a dead link`, left out of the default list and out of the *certain hits* export; `--all` shows them. Measured over all 717 entries with a username that cannot exist, that pattern accounted for **40 of 43** apparent hits, while the reverse case (success text present, code differed) is a plausible real hit and stays in the list. `--strict` narrows a run to hits where both signals agreed.
 - Found / partially found / ambiguous results are shown by default, misses and errors only with `--all` or `[p]naminterset showmissing true`.
-- `--export` writes every result (site, category, status, URL, HTTP code, timing, error) to a file — use it when a run hits the page cap or the run timeout.
+- `--export` writes every result (site, category, status, **match reason**, URL, HTTP code, timing, error) to a file — use it when a run hits the page cap or the run timeout, and to triage an `unsure` row without re-running the lookup.
 - The cog folder is called **`namint`** (`[p]load namint`), not `naminter` — Red puts the cogs directory on `sys.path`, so a folder named `naminter` would shadow the `naminter` package the cog imports. Delete any leftover `naminter/` folder in your cogs directory.
 
 ### micwatch
