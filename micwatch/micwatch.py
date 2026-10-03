@@ -166,6 +166,9 @@ class MicWatch(commands.Cog):
         self._frames_by_op: Dict[int, Dict[int, int]] = {}  # guild -> opcode -> count
         self._frames: Dict[int, int] = {}  # relayed voice frames with opcode 5
         self._frames_with_user: Dict[int, int] = {}
+        # guild_id -> ssrc -> user_id, learned from the frames that name the speaker, so
+        # frames carrying only an ssrc can be attributed to a member as well
+        self._ssrc_user: Dict[int, Dict[int, int]] = {}
         self._last_frame: Dict[int, float] = {}
         self._no_frame_since: Dict[int, float] = {}
         self._no_frame_warned: Set[int] = set()
@@ -362,10 +365,21 @@ class MicWatch(commands.Cog):
                 return
             data = msg.get("d") or {}
             user_id = data.get("user_id")
+            ssrc = data.get("ssrc")
             self._frames[guild.id] = self._frames.get(guild.id, 0) + 1
             self._last_frame[guild.id] = time.monotonic()
+
+            ssrc_map = self._ssrc_user.setdefault(guild.id, {})
+            if user_id is not None and ssrc is not None:
+                # Learn ssrc -> user while Discord names the speaker, so frames that only
+                # carry an ssrc can still be attributed. Those used to be dropped, and the
+                # member was never tracked.
+                ssrc_map[int(ssrc)] = int(user_id)
+            elif user_id is None and ssrc is not None:
+                user_id = ssrc_map.get(int(ssrc))
+
             if user_id is None:
-                # Discord did not name the speaker: without a user id there is nothing to time
+                # Discord named neither a user nor an ssrc we have seen before
                 return
             self._frames_with_user[guild.id] = (
                 self._frames_with_user.get(guild.id, 0) + 1
@@ -690,6 +704,8 @@ class MicWatch(commands.Cog):
         """Disconnect a connection we opened ourselves."""
         self._joined.discard(guild.id)
         self._speak.pop(guild.id, None)
+        # ssrc assignments belong to this voice connection - a later one may reuse them
+        self._ssrc_user.pop(guild.id, None)
         self._empty_since.pop(guild.id, None)
         self._dead_since.pop(guild.id, None)
         self._no_frame_since.pop(guild.id, None)
