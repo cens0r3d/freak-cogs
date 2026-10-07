@@ -99,6 +99,7 @@ Everything except `setcreds` needs **Manage Server**.
 Notes:
 
 - A stream is identified by its start time, so a restart of the bot, a long poll interval or a flapping API never double-posts an alert — only a genuinely new stream announces again.
+- Credentials set with `[p]set api kick …` take effect immediately, without a reload. If none are stored yet, `[p]kickalert authstatus` offers Red's owner-only form so they never have to appear in chat.
 - The poll loop backs off on rate limits (HTTP 429) and API errors and never dies from them. If the alert channel is gone or the bot lacks **Send Messages** / **Embed Links** there, the alert is skipped and retried on the next tick, so nothing is lost while permissions are fixed.
 - Deleting the alerts channel while it is configured clears the reference automatically.
 - Upgrading from 2.x: existing settings and monitored streamers are kept. Credentials stored with the old config keys are moved into Red's shared `kick` token store on the first start, and the old keys are cleared.
