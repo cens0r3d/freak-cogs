@@ -117,8 +117,11 @@ MAX_INLINE_LIST = 24
 USER_CONCURRENCY = 20
 #: Bytes of a profile page read to look for the site's own not-found text.
 USER_BODY_BYTES = 65536
-#: Progress update every n finished checks.
-USER_PROGRESS_EVERY = 10
+#: Seconds between two progress edits of the same message. Discord rate limits
+#: message edits per channel (about one per second sustained), and a 150-site run
+#: finishes checks much faster than that — counting edits instead of timing them
+#: produced a wall of 429s on the first live run.
+USER_PROGRESS_INTERVAL = 3.0
 #: Sites shown inline before the full list becomes a file.
 USER_INLINE_HITS = 20
 
@@ -1143,7 +1146,7 @@ class OSINT(commands.Cog):
         view = ReportView(self)
         try:
             message = await ctx.send(
-                embeds=report.embeds[:10], files=report.files, view=view
+                embeds=report.embeds[:10], files=report.files or None, view=view
             )
         except discord.HTTPException:
             log.exception("OSINT: could not deliver the report for %r", target)
@@ -2123,14 +2126,21 @@ class OSINT(commands.Cog):
 
         view = ReportView(self)
         try:
-            await message.edit(
-                embeds=report.embeds[:10], files=report.files or None, view=view
-            )
+            await message.edit(embeds=report.embeds[:10], view=view)
         except discord.HTTPException:
             log.exception(
                 "OSINT: could not deliver the username report for %r", username
             )
             return
+        if report.files:
+            # ``Message.edit`` has no ``files`` parameter — it takes
+            # ``attachments``, and older discord.py builds refuse new uploads
+            # there altogether — so the file travels as its own message, which
+            # every supported version accepts.
+            try:
+                await ctx.send(files=report.files)
+            except discord.HTTPException:
+                log.warning("OSINT: could not attach the report file for %r", username)
         self._remember(message.id, ctx.author.id, report.data)
 
     def build_file_report(self, data: bytes, filename: str) -> Report:
@@ -2369,18 +2379,23 @@ class OSINT(commands.Cog):
         checks: List[Check] = []
         done = 0
         hits = 0
+        last_update = 0.0
 
         async def run(site: Site) -> None:
-            nonlocal done, hits
+            nonlocal done, hits, last_update
             async with semaphore:
                 check = await self._check_site(site, username, timeout)
             checks.append(check)
             done += 1
             if check.verdict == VERDICT_HIT:
                 hits += 1
-            if on_progress is not None and (
-                done % USER_PROGRESS_EVERY == 0 or done == len(chosen)
-            ):
+            if on_progress is None:
+                return
+            # The final update always goes out; everything in between is spaced
+            # out in time so a fast run cannot trip Discord's edit rate limit.
+            now = time.monotonic()
+            if done == len(chosen) or now - last_update >= USER_PROGRESS_INTERVAL:
+                last_update = now
                 await on_progress(done, len(chosen), hits)
 
         await asyncio.gather(*(run(site) for site in chosen))
