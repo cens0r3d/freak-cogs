@@ -55,6 +55,46 @@ VERDICT_UNSURE = "unsure"
 VERDICT_MISS = "miss"
 VERDICT_ERROR = "error"
 
+#: URL fragments that turn a 200 into "we are looking at a challenge, not a
+#: profile". Anything here means the response carries no information about the
+#: username, so it belongs in *unsure* rather than in the hit list.
+CHALLENGE_URL_MARKERS = (
+    "verify-human",
+    "verify_human",
+    "verify.html",
+    "captcha",
+    "cf-chl",
+    "challenge-platform",
+    "bot-check",
+    "are-you-a-human",
+)
+
+#: The same for the page text. A challenge page is short and says one of these.
+CHALLENGE_BODY_MARKERS = (
+    "just a moment",
+    "checking your browser",
+    "attention required",
+    "enable javascript and cookies",
+    "are you a robot",
+    "unusual traffic",
+    "verify you are human",
+    "cf-error",
+)
+
+#: URL fragments that are the site's own "no such user" page, seen on sites that
+#: answer 200 with a static error URL instead of a 404.
+NOT_FOUND_URL_MARKERS = (
+    "/notfound",
+    "/not-found",
+    "/not_found",
+    "doesnotexist",
+    "does-not-exist",
+    "no-such-user",
+    "nonexistent",
+    "profile-not-found",
+    "user-not-found",
+)
+
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 
 
@@ -172,10 +212,36 @@ def classify(
     if error_url and error_url in url_lower and status < 400:
         return VERDICT_MISS, "auf die Fehler-URL umgeleitet"
 
+    challenge = _challenge_marker(url_lower, body_lower)
+    if challenge:
+        return VERDICT_UNSURE, f"Bot-Schutz statt Profil ({challenge})"
+
+    verdict, reason = _verdict_for_type(
+        site, status, body_lower, url_lower, username_lower
+    )
+
+    if verdict == VERDICT_HIT:
+        # A 200 whose URL is the site's own "no such user" page is not a hit —
+        # `aniworld.to/profil/notFound` answered exactly that way.
+        missing = _missing_url_marker(url_lower)
+        if missing:
+            return VERDICT_UNSURE, f"HTTP {status}, aber die Ziel-URL ist „{missing}“"
+
+    return verdict, reason
+
+
+def _verdict_for_type(
+    site: Site,
+    status: int,
+    body_lower: str,
+    url_lower: str,
+    username_lower: str,
+) -> Tuple[str, str]:
+    """The per-``errorType`` rules, with the normalising work already done."""
     if site.error_type == "message":
         if status >= 400:
             return VERDICT_MISS, f"HTTP {status}"
-        if not body:
+        if not body_lower:
             return VERDICT_UNSURE, "Antwort konnte nicht gelesen werden"
         for marker in site.error_msg:
             if marker.lower() in body_lower:
@@ -205,6 +271,30 @@ def classify(
     if 300 <= status < 400:
         return VERDICT_UNSURE, f"HTTP {status}"
     return VERDICT_MISS, f"HTTP {status}"
+
+
+def _challenge_marker(url_lower: str, body_lower: str) -> str:
+    """The bot-wall a site put in front of us, or an empty string.
+
+    Sites answer a challenge page with a 200 and no not-found text, so without
+    this the engine reports a profile for every blocked request — measured on a
+    60-site run, one of 14 "hits" was Apple's `verify-human/verify.html`.
+    """
+    for marker in CHALLENGE_URL_MARKERS:
+        if marker in url_lower:
+            return marker
+    for marker in CHALLENGE_BODY_MARKERS:
+        if marker in body_lower:
+            return marker
+    return ""
+
+
+def _missing_url_marker(url_lower: str) -> str:
+    """The "no such user" fragment in a final URL, or an empty string."""
+    for marker in NOT_FOUND_URL_MARKERS:
+        if marker in url_lower:
+            return marker
+    return ""
 
 
 @dataclass
