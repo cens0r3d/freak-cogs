@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch
+[p]load vcstatus kickalerts voicesay namint micwatch osint
 ```
 
 Or install one at a time:
@@ -18,6 +18,7 @@ Or install one at a time:
 [p]cog install freak-cogs voicesay
 [p]cog install freak-cogs namint
 [p]cog install freak-cogs micwatch
+[p]cog install freak-cogs osint
 ```
 
 ## Cogs
@@ -231,6 +232,46 @@ Notes:
 - `mic` mode cannot tell talking from a silent open microphone: on push-to-talk users it reacts to the mute button, not to speech. Use `speak` mode when that matters.
 - A `speak`-mode member who is **already** talking when the bot joins the channel is first picked up at their next start/stop — Discord only relays the transitions.
 - The announcement text is capped at 500 characters, like every Discord message.
+
+### osint
+
+Passive reconnaissance for infrastructure and usernames — everything comes from public, key-free sources, nothing is scanned or probed. **No requirements**: it uses `aiohttp`, which ships with Red.
+
+```
+[p]osint lookup 8.8.8.8
+[p]osint domain example.com
+[p]osint subs github.com
+[p]osint url https://example.com/login
+[p]osint user torvalds
+[p]osint user torvalds GitHub,Reddit,GitLab
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]osint lookup <target>` | Recognise the type by itself (IP, domain, URL, `AS…`, MAC, mail) and route it |
+| `[p]osint ip <ip>` | Geolocation, ASN, open ports, hostnames, CVEs, network block, Tor/Spam flags |
+| `[p]osint domain <name>` | RDAP registration, DNS records, SPF/DMARC verdict, HTTP security-header grade |
+| `[p]osint subs <name>` | Subdomains from certificate transparency logs (certspotter → crt.sh → hackertarget) |
+| `[p]osint url <url>` | Live headers, urlscan.io history, Wayback snapshots |
+| `[p]osint asn <AS…\|ip>` | RIPEstat holder, announcement status and prefixes |
+| `[p]osint mac <addr>` | OUI vendor plus locally-administered/multicast flags |
+| `[p]osint gravatar <mail>` | Public Gravatar profile (only the MD5 hash is sent) |
+| `[p]osint exif [url]` | EXIF incl. GPS, PNG text chunks, PDF author/producer, dimensions, MD5/SHA-1/SHA-256 |
+| `[p]osint user <name> [sites]` | Username check across ~480 sites from the Sherlock dataset |
+| `[p]osint sitelist [filter]` | Which sites `user` can check |
+| `[p]osint sources` | Every external service contacted, with its limits |
+| `[p]osint status` | The settings for this server |
+| `[p]osint set …` | Channels, cooldown, audit log, user-lookup limits |
+
+Notes:
+
+- Every report carries a **Rohdaten (JSON)** button with the raw payloads and a **Quellen** button. Both answer **ephemerally** — only the person who ran the command sees them — and say so if the data has expired after a restart.
+- Targets are restricted to publicly routable infrastructure: private, loopback, CGNAT and reserved ranges are refused before any request is made, and redirect chains are re-validated hop by hop so a public URL cannot bounce the bot into the local network.
+- `[p]osint user` counts only hits where the site's own "not found" signal stayed absent. A 2xx whose page text says otherwise, an unreadable body, or a redirect away from the profile URL is reported as **unsure**, never as found. NSFW entries are skipped unless the channel is age-restricted.
+- That command sends one profile request per site (150 by default, `[p]osint set usersites`), 20 in parallel, from the bot's host — so its IP is visible to those sites, and hosts that block datacenter ranges will show up as errors. Narrow a run with `[p]osint user <name> GitHub,Reddit`.
+- It overlaps with `namint`: both enumerate usernames, against different datasets (Sherlock vs. WhatsMyName). Use whichever fits, or both.
+- Answers are cached for 30 minutes per target; `[p]osint set clearcache` drops that cache. Lookups can be limited to specific channels and throttled per member, and an audit channel can log every lookup.
+- Sources and their limits are listed in-game by `[p]osint sources`; the EXIF command's own caveat is that Discord re-encodes uploaded images and drops their metadata, so use a URL to the original file for a photo.
 
 ## Extra setup
 

@@ -1,0 +1,29 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Thank you for installing OSINT!\n\nSetup: nothing is required — every source is key free. Reviews the settings with `[p]osint status` and restricts lookups to one channel with `[p]osint set channels add #osint`.\n\nUsage: `[p]osint lookup <target>` recognises the type by itself, or be explicit with `[p]osint ip|domain|subs|url|asn|mac|gravatar|exif`.\n\nPermissions: every member may run lookups — they are limited by a per-user cooldown (`[p]osint set cooldown 30`). Server managers always keep access unless `[p]osint set exempt` turns that off.\n\nExternal services: lookups are passive and query only public sources, listed in full by `[p]osint sources` — ip-api, Shodan InternetDB, RDAP, Google/Cloudflare DNS-over-HTTPS, certspotter, crt.sh, urlscan.io, the Wayback Machine, RIPEstat, StopForumSpam, the Tor exit list, macvendors and Gravatar. The requests come from the bot host, so its IP is visible to those services. Nothing is scanned, probed or brute-forced.\n\nDependencies: none — the cog uses aiohttp, which ships with Red.",
+    "name": "OSINT",
+    "short": "Passive OSINT lookups for IPs, domains, ASN, URLs, MACs and file metadata.",
+    "description": "Passive infrastructure reconnaissance from public, key-free sources: geolocation with open ports and CVEs (ip-api + Shodan InternetDB), registry data via RDAP, DNS records over DoH with an SPF/DMARC policy check, subdomains from certificate transparency logs, urlscan and Wayback history for a URL, ASN routing data from RIPEstat, MAC vendor lookups, public Gravatar profiles, and metadata (EXIF including GPS, PNG text chunks, PDF author/producer, hashes) of any attachment. Every result offers the raw payloads as a JSON file through a button, reports are cached for 30 minutes, targets are restricted to publicly routable infrastructure, and a per-user cooldown plus guild settings keep the free tier limits intact.",
+    "end_user_data_statement": "This cog stores guild-level configuration only (enabled flag, allowed channel IDs, log channel ID, cooldown seconds) via Red's Config. Lookup targets and results are never written to disk — they live in memory and are dropped when the bot restarts. A submitted target is transmitted to the third-party services listed in `[p]osint sources` during the lookup and written to the configured audit channel, if one is set.",
+    "requirements": [],
+    "tags": [
+        "osint",
+        "recon",
+        "dns",
+        "rdap",
+        "whois",
+        "security",
+        "exif"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
