@@ -17,11 +17,6 @@ Design notes worth knowing before changing anything:
   free tiers are small — ``ip-api`` allows 45 requests per minute, Shodan's
   InternetDB and certspotter are similar, and ``hackertarget`` only 100 per day,
   which is why it is a last-resort fallback for subdomain discovery.
-* ``[p]osint user`` is the one command that makes many requests at once: it
-  works through Sherlock's public site list (``usernames.py``) with up to 20
-  parallel profile requests.  The list is downloaded once a week and cached in
-  the cog's data directory; only a hit where the site's own "not found" signal
-  stayed absent counts, everything weaker is reported as *unsure*.
 * A group's checks do not reach its subcommands, so the lookup gate and the
   admin check are attached to every command individually.
 """
@@ -36,17 +31,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from hashlib import md5
-from pathlib import Path
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-)
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
 from urllib.parse import urljoin
 
 import aiohttp
@@ -54,11 +40,6 @@ import discord
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import box, humanize_list, inline, text_to_file
-
-try:  # Red's documented data directory; the cog still works memory-only without it
-    from redbot.core.data_manager import cog_data_path
-except ImportError:  # pragma: no cover - only if Red changes its layout
-    cog_data_path = None
 
 from .parsers import (
     classify_target,
@@ -82,24 +63,6 @@ from .parsers import (
     rdap_summary,
     truncate,
 )
-from .usernames import (
-    DATA_FILENAME,
-    DATA_MAX_AGE,
-    DATA_URL as USERNAME_DATA_URL,
-    Check,
-    Site,
-    VERDICT_ERROR,
-    VERDICT_HIT,
-    VERDICT_MISS,
-    VERDICT_UNSURE,
-    classify as classify_response,
-    parse_sites,
-    profile_url,
-    select_sites,
-    snapshot as verdict_snapshot,
-    summarize as summarize_checks,
-    valid_username,
-)
 
 log = logging.getLogger("red.freak_cogs.osint")
 
@@ -112,19 +75,6 @@ CACHE_SECONDS = 1800
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_REPORTS_KEPT = 200
 MAX_INLINE_LIST = 24
-#: Parallel profile checks for `[p]osint user` — high enough to finish in
-#: seconds, low enough not to look like an attack to the sites.
-USER_CONCURRENCY = 20
-#: Bytes of a profile page read to look for the site's own not-found text.
-USER_BODY_BYTES = 65536
-#: Seconds between two progress edits of the same message. Discord rate limits
-#: message edits per channel (about one per second sustained), and a 150-site run
-#: finishes checks much faster than that — counting edits instead of timing them
-#: produced a wall of 429s on the first live run.
-USER_PROGRESS_INTERVAL = 3.0
-#: Sites shown inline before the full list becomes a file.
-USER_INLINE_HITS = 20
-
 IP_API = "http://ip-api.com/json/{target}"
 IP_API_FIELDS = (
     "status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,"
@@ -221,17 +171,6 @@ SOURCES: Tuple[Tuple[str, str, str], ...] = (
         "gravatar.com",
         "Public Gravatar profile for an email address",
         "Keyless; only the MD5 hash of the address is sent, never the address",
-    ),
-    (
-        "raw.githubusercontent.com",
-        "Sherlock's site list (~480 sites) for `[p]osint user`",
-        "One download per week, cached in the cog's data directory",
-    ),
-    (
-        "die Sites des Sherlock-Datensatzes",
-        "`[p]osint user` fragt jede ausgewählte Site einzeln ab (ein Profilaufruf pro Site)",
-        "Standardgrenze 150 Sites pro Lookup, 20 parallel — die IP des Bots ist für "
-        "diese Sites sichtbar",
     ),
 )
 
@@ -358,8 +297,6 @@ class OSINT(commands.Cog):
         self._reports: Dict[int, Tuple[int, Dict[str, Any]]] = {}
         self._last_use: Dict[Tuple[int, int], float] = {}
         self._tor_cache: Optional[Tuple[float, frozenset]] = None
-        self._sites: Dict[str, Site] = {}
-        self._sites_loaded = 0.0
         self.config = Config.get_conf(
             self, identifier=72_194_508_314_66, force_registration=True
         )
@@ -369,10 +306,6 @@ class OSINT(commands.Cog):
             cooldown=15,
             log_channel=None,
             exempt_managers=True,
-            user_sites=150,
-            user_timeout=10,
-            user_nsfw=True,
-            user_misses=False,
         )
 
     async def cog_load(self) -> None:
@@ -792,70 +725,6 @@ class OSINT(commands.Cog):
         """
         await self._run_exif(ctx, url)
 
-    @osint.command(name="user", aliases=["username"])
-    @commands.guild_only()
-    @gated()
-    async def user(
-        self, ctx: commands.Context, username: str, sites: Optional[str] = None
-    ) -> None:
-        """Check a username across ~480 sites (Sherlock site list).
-
-        A **hit** is a profile where the site did not report its own "not found".
-        Results that rest on the status code alone, with page text suggesting
-        otherwise, are listed as **unsure** instead of being sold as found.
-
-        Narrow the run with a comma-separated site list — useful when the bot's
-        host is blocked by most sites.
-
-        **Examples**
-
-        * `[p]osint user torvalds`
-        * `[p]osint user torvalds GitHub,Reddit,GitLab`
-        """
-        names = (
-            [part.strip() for part in sites.split(",") if part.strip()]
-            if sites
-            else None
-        )
-        await self._run_user(ctx, username, names)
-
-    @osint.command(name="sitelist", aliases=["sites"])
-    @commands.guild_only()
-    async def sitelist(
-        self, ctx: commands.Context, *, search: Optional[str] = None
-    ) -> None:
-        """List the sites `[p]osint user` can check, optionally filtered.
-
-        Long lists arrive as a text file.
-
-        **Example:** `[p]osint sitelist git`
-        """
-        try:
-            catalogue = await self.site_catalogue()
-        except OSINTError as exc:
-            await ctx.send(str(exc))
-            return
-
-        names = sorted(
-            (
-                name
-                for name in catalogue
-                if not search or search.lower() in name.lower()
-            ),
-            key=str.lower,
-        )
-        if not names:
-            await ctx.send(f"Keine Site passt zu {inline(truncate(search or '', 40))}.")
-            return
-        listing = "\n".join(names)
-        if len(listing) > 1500:
-            await ctx.send(
-                f"**{len(names)}** Sites im Datensatz.",
-                file=text_to_file(listing, filename="osint-sites.txt"),
-            )
-            return
-        await ctx.send(f"**{len(names)}** Sites:\n{box(listing, lang='yaml')}")
-
     @osint.command(name="sources")
     @commands.guild_only()
     async def sources(self, ctx: commands.Context) -> None:
@@ -880,9 +749,6 @@ class OSINT(commands.Cog):
                 else "**Log-Kanal:** keiner"
             ),
             f"**Cache:** {len(self._cache)} Einträge, {CACHE_SECONDS // 60} Minuten TTL",
-            f"**User-Suche:** {'alle' if not conf['user_sites'] else conf['user_sites']} Sites, "
-            f"{conf['user_timeout']}s Timeout, NSFW-Filter "
-            f"{'an' if conf['user_nsfw'] else 'aus'}",
         ]
         await ctx.send("\n".join(lines))
 
@@ -1021,96 +887,6 @@ class OSINT(commands.Cog):
         self._tor_cache = None
         await ctx.send(f"{count} gecachte Antworten verworfen.")
 
-    @set_group.command(name="usersites")
-    @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
-    async def set_usersites(self, ctx: commands.Context, count: int) -> None:
-        """How many sites `[p]osint user` checks per lookup (`0` = all ~480).
-
-        **Example:** `[p]osint set usersites 60`
-        """
-        if count < 0 or count > 600:
-            await ctx.send("Erlaubt sind 0 (alle) bis 600.")
-            return
-        await self.config.guild(ctx.guild).user_sites.set(count)
-        await ctx.send(
-            f"`osint user` prüft jetzt "
-            f"{'alle Sites' if count == 0 else str(count) + ' Sites'} pro Lookup."
-        )
-
-    @set_group.command(name="usertimeout")
-    @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
-    async def set_usertimeout(self, ctx: commands.Context, seconds: int) -> None:
-        """Timeout per site for `[p]osint user` (3–30 seconds, default 10)."""
-        if seconds < 3 or seconds > 30:
-            await ctx.send("Erlaubt sind 3 bis 30 Sekunden.")
-            return
-        await self.config.guild(ctx.guild).user_timeout.set(seconds)
-        await ctx.send(f"Timeout pro Site: **{seconds}s**.")
-
-    @set_group.command(name="usermisses")
-    @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
-    async def set_usermisses(self, ctx: commands.Context) -> None:
-        """Toggle whether `[p]osint user` also lists the sites without a profile."""
-        current = await self.config.guild(ctx.guild).user_misses()
-        await self.config.guild(ctx.guild).user_misses.set(not current)
-        await ctx.send(
-            "Sites ohne Profil werden jetzt mit ausgegeben."
-            if not current
-            else "Sites ohne Profil werden nicht mehr ausgegeben."
-        )
-
-    @set_group.command(name="usernsfw")
-    @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
-    async def set_usernsfw(self, ctx: commands.Context) -> None:
-        """Toggle whether `[p]osint user` skips NSFW sites (19 in the dataset).
-
-        With the filter on, the ~19 NSFW entries are only checked in channels
-        Discord marks as age-restricted.
-        """
-        current = await self.config.guild(ctx.guild).user_nsfw()
-        await self.config.guild(ctx.guild).user_nsfw.set(not current)
-        await ctx.send(
-            "NSFW-Sites werden gefiltert (nur in NSFW-Kanälen geprüft)."
-            if not current
-            else "NSFW-Sites werden immer mitgeprüft."
-        )
-
-    @set_group.command(name="userdataset")
-    @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
-    async def set_userdataset(
-        self, ctx: commands.Context, action: Optional[str] = None
-    ) -> None:
-        """Show the state of the site list, or reload it with `refresh`."""
-        if action and action.lower() == "refresh":
-            async with ctx.typing():
-                try:
-                    catalogue = await self.site_catalogue(force=True)
-                except OSINTError as exc:
-                    await ctx.send(str(exc))
-                    return
-            await ctx.send(f"Site-Liste neu geladen: **{len(catalogue)}** Sites.")
-            return
-
-        path = self._site_cache_path()
-        age = (
-            f"{int((time.monotonic() - self._sites_loaded) / 60)} Minuten"
-            if self._sites_loaded
-            else "noch nicht geladen"
-        )
-        await ctx.send(
-            f"**Sites im Speicher:** {len(self._sites)} ({age})\n"
-            f"**Quelle:** {USERNAME_DATA_URL}\n"
-            f"**Datei:** {inline(str(path)) if path else 'keine (nur im Speicher)'}\n"
-            f"**Gültigkeit:** {DATA_MAX_AGE // 86400} Tage\n"
-            f"**Erneuern:** `[p]osint set userdataset refresh`"
-        )
-
-    # ------------------------------------------------------------------
     # Lookup plumbing
     # ------------------------------------------------------------------
 
@@ -2059,90 +1835,6 @@ class OSINT(commands.Cog):
         )
         self._remember(message.id, ctx.author.id, report.data)
 
-    async def _run_user(
-        self, ctx: commands.Context, username: str, names: Optional[Sequence[str]]
-    ) -> None:
-        """`[p]osint user` — a live progress bar, then the report in its place."""
-        await self._audit(ctx, "user", username)
-        conf = await self.config.guild(ctx.guild).all()
-
-        # Naming sites explicitly means the run is small on purpose, so the
-        # per-guild cap does not apply to it.
-        limit = 0 if names else int(conf["user_sites"] or 0)
-        allow_nsfw = bool(getattr(ctx.channel, "nsfw", False)) or not conf["user_nsfw"]
-
-        title = f"Benutzername · {username}"
-        try:
-            message = await ctx.send(
-                embed=discord.Embed(
-                    title=title,
-                    description="Site-Liste wird geladen …",
-                    colour=await self._colour(),
-                )
-            )
-        except discord.HTTPException:
-            log.exception("OSINT: could not open the progress message")
-            return
-
-        async def on_progress(checked: int, total: int, hits: int) -> None:
-            bar = _progress_bar(checked, total)
-            try:
-                await message.edit(
-                    embed=discord.Embed(
-                        title=title,
-                        description=(
-                            f"{box(bar, lang='yaml')}\n"
-                            f"**Geprüft:** {checked}/{total} · **Treffer:** {hits}"
-                        ),
-                        colour=await self._colour(),
-                    )
-                )
-            except discord.HTTPException:
-                log.debug("OSINT: progress update failed", exc_info=True)
-
-        try:
-            report = await self.report_user(
-                username,
-                allow_nsfw=allow_nsfw,
-                names=names,
-                limit=limit,
-                timeout=int(conf["user_timeout"] or 10),
-                include_misses=bool(conf["user_misses"]),
-                on_progress=on_progress,
-            )
-        except OSINTError as exc:
-            await message.edit(embed=discord.Embed(description=str(exc)))
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("OSINT: username lookup for %r failed", username)
-            await message.edit(
-                embed=discord.Embed(
-                    description="Der Lookup ist fehlgeschlagen. Details stehen im Bot-Log."
-                )
-            )
-            return
-
-        view = ReportView(self)
-        try:
-            await message.edit(embeds=report.embeds[:10], view=view)
-        except discord.HTTPException:
-            log.exception(
-                "OSINT: could not deliver the username report for %r", username
-            )
-            return
-        if report.files:
-            # ``Message.edit`` has no ``files`` parameter — it takes
-            # ``attachments``, and older discord.py builds refuse new uploads
-            # there altogether — so the file travels as its own message, which
-            # every supported version accepts.
-            try:
-                await ctx.send(files=report.files)
-            except discord.HTTPException:
-                log.warning("OSINT: could not attach the report file for %r", username)
-        self._remember(message.id, ctx.author.id, report.data)
-
     def build_file_report(self, data: bytes, filename: str) -> Report:
         """Everything worth knowing about an arbitrary file, as embeds."""
         info = file_metadata(data, filename)
@@ -2264,238 +1956,6 @@ class OSINT(commands.Cog):
         return data, filename
 
     # ------------------------------------------------------------------
-    # Username enumeration (`[p]osint user`)
-    # ------------------------------------------------------------------
-
-    def _site_cache_path(self) -> Optional[Path]:
-        """Where the downloaded site list lives, if Red told us where to write."""
-        if cog_data_path is None:
-            return None
-        try:
-            return Path(cog_data_path(self)) / DATA_FILENAME
-        except Exception:
-            log.debug("OSINT: no data path for the site list", exc_info=True)
-            return None
-
-    async def site_catalogue(self, force: bool = False) -> Dict[str, Site]:
-        """The Sherlock site list: memory first, then disk, then GitHub."""
-        now = time.monotonic()
-        if not force and self._sites and now - self._sites_loaded < DATA_MAX_AGE:
-            return self._sites
-
-        path = self._site_cache_path()
-        if path is not None and path.exists() and not force:
-            try:
-                if time.time() - path.stat().st_mtime < DATA_MAX_AGE:
-                    cached = parse_sites(json.loads(path.read_text(encoding="utf-8")))
-                    if cached:
-                        self._sites, self._sites_loaded = cached, now
-                        log.debug("OSINT: site list restored from %s", path)
-                        return cached
-            except (OSError, ValueError):
-                log.debug("OSINT: cached site list unreadable", exc_info=True)
-
-        status, payload, _ = await self._fetch("site-list", USERNAME_DATA_URL, ttl=0)
-        sites = parse_sites(payload) if status == 200 else {}
-        if not sites:
-            if self._sites:
-                return self._sites
-            raise OSINTError(
-                "Die Site-Liste von GitHub konnte nicht geladen werden "
-                f"(HTTP {status}) — bitte später erneut versuchen."
-            )
-
-        self._sites, self._sites_loaded = sites, now
-        if path is not None:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(payload), encoding="utf-8")
-            except OSError:
-                log.debug("OSINT: could not cache the site list", exc_info=True)
-        return sites
-
-    async def _check_site(self, site: Site, username: str, timeout: int) -> Check:
-        """Ask one site whether this username exists there."""
-        url = profile_url(site, username)
-        try:
-            async with self._client().get(
-                url,
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html,*/*"},
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                status = response.status
-                final_url = str(response.url)
-                body = ""
-                if status < 400:
-                    body = (await response.content.read(USER_BODY_BYTES)).decode(
-                        "utf-8", "replace"
-                    )
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            return Check(
-                site=site, verdict=VERDICT_ERROR, reason=type(exc).__name__, url=url
-            )
-
-        verdict, reason = classify_response(
-            site, status=status, body=body, final_url=final_url, username=username
-        )
-        return Check(
-            site=site,
-            verdict=verdict,
-            reason=reason,
-            status=status,
-            url=final_url or url,
-        )
-
-    async def report_user(
-        self,
-        username: str,
-        *,
-        allow_nsfw: bool = False,
-        names: Optional[Sequence[str]] = None,
-        limit: int = 0,
-        timeout: int = 10,
-        include_misses: bool = False,
-        on_progress: Optional[Callable[[int, int, int], Awaitable[None]]] = None,
-    ) -> Report:
-        """Check one username against the Sherlock site list."""
-        username = username.strip().lstrip("@")
-        if not valid_username(username):
-            raise OSINTError(
-                "Erwartet wird ein Benutzername aus 1–40 Zeichen: Buchstaben, Ziffern, "
-                "`_`, `-` und `.`."
-            )
-
-        catalogue = await self.site_catalogue()
-        chosen = select_sites(
-            catalogue, username, allow_nsfw=allow_nsfw, names=names, limit=limit
-        )
-        if not chosen:
-            raise OSINTError(
-                "Keine passende Site im Datensatz — Filter oder Name prüfen."
-            )
-
-        semaphore = asyncio.Semaphore(USER_CONCURRENCY)
-        checks: List[Check] = []
-        done = 0
-        hits = 0
-        last_update = 0.0
-
-        async def run(site: Site) -> None:
-            nonlocal done, hits, last_update
-            async with semaphore:
-                check = await self._check_site(site, username, timeout)
-            checks.append(check)
-            done += 1
-            if check.verdict == VERDICT_HIT:
-                hits += 1
-            if on_progress is None:
-                return
-            # The final update always goes out; everything in between is spaced
-            # out in time so a fast run cannot trip Discord's edit rate limit.
-            now = time.monotonic()
-            if done == len(chosen) or now - last_update >= USER_PROGRESS_INTERVAL:
-                last_update = now
-                await on_progress(done, len(chosen), hits)
-
-        await asyncio.gather(*(run(site) for site in chosen))
-
-        stats = summarize_checks(checks)
-        embed = discord.Embed(
-            title=f"Benutzername · {username}",
-            colour=await self._colour(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.description = (
-            f"**{len(stats['hits'])}** Treffer · **{len(stats['unsure'])}** unsicher · "
-            f"{len(stats['misses'])} ohne Profil · {len(stats['errors'])} Fehler\n"
-            f"Geprüft: {stats['checked']} von {len(catalogue)} Sites im Datensatz\n\n"
-            "Ein **Treffer** ist ein Profil, bei dem die Seite ihr eigenes "
-            "„gibt es nicht“ nicht gemeldet hat. Wenn nur der Statuscode dafür spricht "
-            "und der Seitentext widerspricht, steht der Eintrag unter **unsicher**."
-        )
-
-        if stats["hits"]:
-            titles = [
-                f"[{check.site.name}]({check.url})"
-                for check in stats["hits"][:USER_INLINE_HITS]
-            ]
-            name = (
-                "Treffer"
-                if len(stats["hits"]) <= USER_INLINE_HITS
-                else f"Treffer (erste {USER_INLINE_HITS} von {len(stats['hits'])})"
-            )
-            embed.add_field(
-                name=name, value=truncate("\n".join(titles), 1020), inline=False
-            )
-        else:
-            embed.add_field(
-                name="Treffer",
-                value="Keine — der Name ist in keinem der geprüften Profile belegt.",
-                inline=False,
-            )
-
-        if stats["unsure"]:
-            unsure = [
-                f"[{check.site.name}]({check.url}) — {truncate(check.reason, 70)}"
-                for check in stats["unsure"][:10]
-            ]
-            embed.add_field(
-                name=f"Unsicher ({len(stats['unsure'])})",
-                value=truncate("\n".join(unsure), 1020),
-                inline=False,
-            )
-        if stats["errors"]:
-            embed.add_field(
-                name=f"Fehler ({len(stats['errors'])})",
-                value=(
-                    f"{len(stats['errors'])} Sites haben nicht geantwortet. Viele Dienste "
-                    "weisen Rechenzentrums-IPs ab — mit `[p]osint user <name> <site>` "
-                    "lassen sich einzelne Sites nachprüfen."
-                ),
-                inline=False,
-            )
-        embed.set_footer(
-            text="Sherlock-Datensatz (sherlock-project) · ein Profilaufruf pro Site, kein Login"
-        )
-
-        files: List[discord.File] = []
-        if len(stats["hits"]) > USER_INLINE_HITS or (
-            include_misses and stats["misses"]
-        ):
-            lines = [
-                f"# {username}",
-                f"{stats['checked']} Sites geprüft",
-                "",
-                f"## Treffer ({len(stats['hits'])})",
-            ]
-            lines += [f"{check.site.name}: {check.url}" for check in stats["hits"]]
-            lines += ["", f"## Unsicher ({len(stats['unsure'])})"]
-            lines += [
-                f"{check.site.name}: {check.reason} — {check.url}"
-                for check in stats["unsure"]
-            ]
-            if include_misses:
-                lines += ["", f"## Ohne Profil ({len(stats['misses'])})"]
-                lines += [check.site.name for check in stats["misses"]]
-            files.append(
-                text_to_file("\n".join(lines), filename=f"username-{username}.txt")
-            )
-
-        data: Dict[str, Any] = {
-            "target": username,
-            "dataset_sites": len(catalogue),
-            "checked": stats["checked"],
-            "hits": verdict_snapshot(checks, [VERDICT_HIT]),
-            "unsure": verdict_snapshot(checks, [VERDICT_UNSURE]),
-            "errors": verdict_snapshot(checks, [VERDICT_ERROR]),
-        }
-        if include_misses:
-            data["misses"] = verdict_snapshot(checks, [VERDICT_MISS])
-
-        return Report(embeds=[embed], files=files, data=data)
-
-    # ------------------------------------------------------------------
     # Presentation helpers
     # ------------------------------------------------------------------
 
@@ -2544,13 +2004,6 @@ class OSINT(commands.Cog):
             f"[urlscan](https://urlscan.io/domain/{quoted}) · "
             f"[RIPEstat](https://stat.ripe.net/{quoted})"
         )
-
-
-def _progress_bar(done: int, total: int, width: int = 20) -> str:
-    """A plain-ASCII progress bar for the username lookup."""
-    ratio = done / total if total else 1.0
-    filled = max(0, min(width, int(width * ratio)))
-    return f"[{'#' * filled}{'.' * (width - filled)}] {int(ratio * 100):3d}%"
 
 
 def _parse_cdx(value: Any) -> List[Tuple[str, str]]:
