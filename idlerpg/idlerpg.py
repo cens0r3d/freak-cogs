@@ -120,7 +120,7 @@ def admin_command(func):
 class IdleRPG(commands.Cog):
     """Idle-Rollenspiel: Figur registrieren, idlen, leveln, kämpfen."""
 
-    __version__ = "1.0.0"
+    __version__ = "1.0.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -930,9 +930,7 @@ class IdleRPG(commands.Cog):
             return False
         return True
 
-    @commands.group(
-        name="idlerpg", aliases=["irpg", "idle"], invoke_without_command=True
-    )
+    @commands.group(name="idlerpg", aliases=["irpg"], invoke_without_command=True)
     @commands.guild_only()
     async def idlerpg(self, ctx: commands.Context) -> None:
         """Idle-Rollenspiel: registrieren, idlen, leveln."""
