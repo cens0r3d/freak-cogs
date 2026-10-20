@@ -322,6 +322,7 @@ Notes:
 - **Battles** only happen on a level-up: below level 25 with a configurable chance, from 25 on always. Wins cost the loser nothing unless a critical strike lands (1/50 good, 1/35 neutral, 1/20 evil); a win can also steal one better item.
 - Data is written every 60 seconds and on unload, not on every tick, so a busy server does not hammer the config. `[p]mydata` returns your character as a file, `[p]mydata forgetme` deletes it.
 - **No requirements** — only what Red already ships.
+- Full manual, formulas and defaults: [`idlerpg/README.md`](idlerpg/README.md).
 
 ## Extra setup
 
