@@ -297,6 +297,27 @@ def _clean_slug(value: Any) -> str:
     return slug if SLUG_RE.match(slug) else ""
 
 
+def ping_mention(guild: discord.Guild, role_id: Any) -> Optional[str]:
+    """Mention text for a stored role id, safe for the @everyone role.
+
+    ``Role.mention`` is always ``<@&id>``; for the default role that id is the
+    guild id, and Discord renders it as ``@@everyone`` without pinging. The
+    literal ``@everyone`` is the only form that displays and pings correctly.
+    """
+    parsed = _as_int(role_id)
+    if not parsed:
+        return None
+    if parsed == guild.id:
+        return "@everyone"
+    role = guild.get_role(parsed)
+    return role.mention if role is not None else None
+
+
+def pings_everyone(guild: discord.Guild, role_id: Any) -> bool:
+    """Whether a stored ping-role id is the guild's default (@everyone) role."""
+    return _as_int(role_id) == guild.id
+
+
 def _retry_delay(attempt: int, status: int, retry_after: Any = None) -> float:
     """Seconds to wait before retrying a failed request."""
     seconds = _as_int(retry_after)
@@ -996,10 +1017,9 @@ class KickAlerts(commands.Cog):
         """Role ping plus optional custom message for an announcement."""
         lines: List[str] = []
         role_id = state.get("ping_role_id") or global_role
-        if role_id:
-            role = guild.get_role(int(role_id))
-            if role is not None:
-                lines.append(role.mention)
+        mention = ping_mention(guild, role_id)
+        if mention:
+            lines.append(mention)
         template = state.get("custom_message")
         if template:
             lines.append(render_template(str(template), info))
@@ -1024,11 +1044,14 @@ class KickAlerts(commands.Cog):
                 guild.id,
             )
             return False
+        role_id = state.get("ping_role_id") or global_role
         try:
             message = await channel.send(
                 content=self._alert_content(guild, info, state, global_role),
                 embed=build_live_embed(info, settings),
-                allowed_mentions=discord.AllowedMentions(roles=True, everyone=False),
+                allowed_mentions=discord.AllowedMentions(
+                    roles=True, everyone=pings_everyone(guild, role_id)
+                ),
             )
         except discord.HTTPException:
             log.exception("KickAlerts: could not post the alert for %s", slug)
@@ -1310,7 +1333,7 @@ class KickAlerts(commands.Cog):
                 channel_id = state.get("channel_id") or global_channel
                 channel = f"<#{channel_id}>" if channel_id else "not set"
                 role = state.get("ping_role_id") or global_role
-                ping = f"<@&{role}>" if role else "none"
+                ping = ping_mention(ctx.guild, role) or "none"
                 flags = []
                 if state.get("muted"):
                     flags.append("paused")
@@ -1357,9 +1380,14 @@ class KickAlerts(commands.Cog):
         self, ctx: commands.Context, role: discord.Role, username: Optional[str] = None
     ) -> None:
         """Set the ping role, for one streamer or as the default."""
+        note = ""
+        can_ping_everyone = ctx.channel.permissions_for(ctx.guild.me).mention_everyone
+        if role.is_default() and not can_ping_everyone:
+            note = "\n⚠️ I lack **Mention @everyone**, so the alert will not ping."
+        mention = ping_mention(ctx.guild, role.id) or role.name
         if username is None:
             await self.config.guild(ctx.guild).global_ping_role_id.set(role.id)
-            await ctx.send(f"✅ Default ping role is now {role.mention}.")
+            await ctx.send(f"✅ Default ping role is now {mention}.{note}")
             return
         slug = clean_slug(username) or username.strip().lower()
         async with self.config.guild(ctx.guild).streamers() as streamers:
@@ -1367,7 +1395,7 @@ class KickAlerts(commands.Cog):
                 await ctx.send(f"**{slug}** is not monitored.")
                 return
             streamers[slug]["ping_role_id"] = role.id
-        await ctx.send(f"✅ **{slug}** now pings {role.mention}.")
+        await ctx.send(f"✅ **{slug}** now pings {mention}.{note}")
 
     @kickalert.command(name="removerole")
     @checks.admin_or_permissions(manage_guild=True)
@@ -1593,7 +1621,7 @@ class KickAlerts(commands.Cog):
         )
         embed.add_field(
             name="Default ping role",
-            value=f"<@&{role}>" if role else "none",
+            value=ping_mention(ctx.guild, role) or "none",
             inline=True,
         )
         embed.add_field(
@@ -1748,6 +1776,7 @@ __all__ = [
     "clean_slug",
     "format_uptime",
     "parse_kick_time",
+    "ping_mention",
     "render_template",
 ]
 
