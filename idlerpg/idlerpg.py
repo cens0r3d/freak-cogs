@@ -118,7 +118,7 @@ def admin_command(func):
 class IdleRPG(commands.Cog):
     """Idle RPG: register a character, idle, level up, fight."""
 
-    __version__ = "1.1.0"
+    __version__ = "1.1.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -234,6 +234,17 @@ class IdleRPG(commands.Cog):
                 await self._save(guild_id)
             except Exception:
                 log.exception("IdleRPG: saving guild %s failed", guild_id)
+
+    async def _load_quest(self, guild: discord.Guild) -> Dict[str, Any]:
+        """Cached quest of a guild; stale names from older versions are replaced."""
+        if guild.id in self._quest_loaded:
+            return self.quests.get(guild.id) or {}
+        quest = await self.config.guild(guild).quest() or {}
+        if quest and quest.get("name") not in QUEST_NAMES:
+            quest["name"] = self._rng.choice(QUEST_NAMES)
+        self.quests[guild.id] = quest
+        self._quest_loaded.add(guild.id)
+        return quest
 
     async def _save_quest(self, guild_id: int, quest: Dict[str, Any]) -> None:
         self.quests[guild_id] = quest
@@ -501,11 +512,7 @@ class IdleRPG(commands.Cog):
         now: float,
         lines: List[str],
     ) -> None:
-        if guild.id not in self._quest_loaded:
-            self.quests[guild.id] = await self.config.guild(guild).quest() or {}
-            self._quest_loaded.add(guild.id)
-
-        quest = self.quests.get(guild.id) or {}
+        quest = await self._load_quest(guild)
 
         if quest and now >= float(quest.get("end", 0)):
             member_ids = [int(member) for member in quest.get("members", [])]
@@ -1098,10 +1105,7 @@ class IdleRPG(commands.Cog):
             return
         conf = await self._settings(ctx.guild)
         players = await self._players(ctx.guild)
-        if ctx.guild.id not in self._quest_loaded:
-            self.quests[ctx.guild.id] = await self.config.guild(ctx.guild).quest() or {}
-            self._quest_loaded.add(ctx.guild.id)
-        quest = self.quests.get(ctx.guild.id) or {}
+        quest = await self._load_quest(ctx.guild)
         await ctx.send(
             embed=self._realm_embed(
                 ctx.guild, players, conf, quest, await self._colour(ctx)
@@ -1116,10 +1120,7 @@ class IdleRPG(commands.Cog):
             return
         conf = await self._settings(ctx.guild)
         players = await self._players(ctx.guild)
-        if ctx.guild.id not in self._quest_loaded:
-            self.quests[ctx.guild.id] = await self.config.guild(ctx.guild).quest() or {}
-            self._quest_loaded.add(ctx.guild.id)
-        quest = self.quests.get(ctx.guild.id) or {}
+        quest = await self._load_quest(ctx.guild)
 
         if not quest:
             eligible = sum(
@@ -1159,14 +1160,12 @@ class IdleRPG(commands.Cog):
         channel = channel or ctx.channel
         conf = await self._settings(ctx.guild)
         players = await self._players(ctx.guild)
-        if ctx.guild.id not in self._quest_loaded:
-            self.quests[ctx.guild.id] = await self.config.guild(ctx.guild).quest() or {}
-            self._quest_loaded.add(ctx.guild.id)
+        quest = await self._load_quest(ctx.guild)
         embed = self._realm_embed(
             ctx.guild,
             players,
             conf,
-            self.quests.get(ctx.guild.id) or {},
+            quest,
             await self._colour(ctx),
         )
         embed.title = "⚔️ IdleRPG"
@@ -1560,12 +1559,7 @@ class RealmPanel(discord.ui.View):
     ) -> None:
         conf = await self.cog._settings(interaction.guild)
         players = await self.cog._players(interaction.guild)
-        if interaction.guild.id not in self.cog._quest_loaded:
-            self.cog.quests[interaction.guild.id] = (
-                await self.cog.config.guild(interaction.guild).quest() or {}
-            )
-            self.cog._quest_loaded.add(interaction.guild.id)
-        quest = self.cog.quests.get(interaction.guild.id) or {}
+        quest = await self.cog._load_quest(interaction.guild)
         await interaction.response.send_message(
             embed=self.cog._realm_embed(interaction.guild, players, conf, quest),
             ephemeral=True,

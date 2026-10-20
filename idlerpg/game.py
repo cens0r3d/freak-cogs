@@ -178,16 +178,30 @@ def weighted_item_level(max_level: int, rng: random.Random) -> int:
     return max_level
 
 
-def _suffix_for(level: int, rng: random.Random) -> str:
+def _suffixes_for(level: int) -> Tuple[str, ...]:
     for ceiling, suffixes in NAME_SUFFIXES:
         if level < ceiling:
-            return rng.choice(suffixes)
-    return rng.choice(NAME_SUFFIXES[-1][1])
+            return suffixes
+    return NAME_SUFFIXES[-1][1]
 
 
-def item_name(slot: str, level: int, rng: random.Random) -> str:
-    noun = rng.choice(ITEM_NOUNS.get(slot, ("Item",)))
-    return f"{noun} {_suffix_for(level, rng)}"
+def name_variants(slot: str, level: int) -> int:
+    """How many different names exist for this slot at this level."""
+    return len(ITEM_NOUNS.get(slot, ("Item",))) * len(_suffixes_for(level))
+
+
+def item_name(slot: str, level: int, variant: int = 0) -> str:
+    """Deterministic name for an item.
+
+    The name is derived from slot, level and a stored variant instead of being
+    kept in the save data, so renaming or translating the tables updates every
+    character instead of leaving old names behind.
+    """
+    nouns = ITEM_NOUNS.get(slot, ("Item",))
+    suffixes = _suffixes_for(level)
+    noun = nouns[int(variant) % len(nouns)]
+    suffix = suffixes[(int(variant) // len(nouns)) % len(suffixes)]
+    return f"{noun} {suffix}"
 
 
 def roll_item(
@@ -199,24 +213,27 @@ def roll_item(
     ``level * item_mult``.
     """
     if _setting(settings, "uniques", True):
-        for unique in UNIQUES:
+        for index, unique in enumerate(UNIQUES):
             if level >= unique["req"] and rng.random() < 1 / 40:
                 return {
                     "name": unique["name"],
                     "slot": unique["slot"],
                     "level": rng.randint(unique["lo"], unique["hi"]),
                     "unique": True,
+                    "variant": index,
                 }
 
     mult = float(_setting(settings, "item_mult", 1.5))
     max_level = max(1, int(level * mult))
     found = weighted_item_level(max_level, rng)
     slot = rng.choice(SLOTS)
+    variant = rng.randrange(name_variants(slot, found))
     return {
-        "name": item_name(slot, found, rng),
+        "name": item_name(slot, found, variant),
         "slot": slot,
         "level": found,
         "unique": False,
+        "variant": variant,
     }
 
 
@@ -343,6 +360,38 @@ def percent(fraction: float) -> str:
     return f"{max(0.0, min(1.0, float(fraction))) * 100:.1f}%"
 
 
+def _unique_for(
+    slot: str, level: int, stored_name: str, variant: int
+) -> Optional[Dict[str, Any]]:
+    """Pick the unique item a saved entry belongs to (old saves lack ``variant``)."""
+    if 0 <= variant < len(UNIQUES) and UNIQUES[variant]["slot"] == slot:
+        return UNIQUES[variant]
+    for unique in UNIQUES:
+        if unique["name"] == stored_name:
+            return unique
+    for unique in UNIQUES:
+        if unique["slot"] == slot and unique["lo"] <= level <= unique["hi"]:
+            return unique
+    return None
+
+
+def _item_display_name(
+    slot: str, level: int, unique: bool, variant: int, stored_name: str
+) -> str:
+    if unique:
+        match = _unique_for(slot, level, stored_name, variant)
+        return match["name"] if match else (stored_name or "Relic")
+    return item_name(slot, level, variant)
+
+
+def _class_name(value: Any) -> str:
+    """Older saves may carry the German default class."""
+    text = str(value or "").strip() or "Adventurer"
+    if text == "Abenteurer":
+        return "Adventurer"
+    return text
+
+
 @dataclass
 class Player:
     """A character. ``ttl`` is the seconds remaining to the next level."""
@@ -387,7 +436,16 @@ class Player:
             "align": self.align,
             "level": int(self.level),
             "ttl": float(self.ttl),
-            "items": {slot: dict(item) for slot, item in (self.items or {}).items()},
+            "items": {
+                slot: {
+                    "name": item.get("name", ""),
+                    "slot": slot,
+                    "level": int(item.get("level", 1)),
+                    "unique": bool(item.get("unique")),
+                    "variant": int(item.get("variant") or 0),
+                }
+                for slot, item in (self.items or {}).items()
+            },
             "created": float(self.created),
             "idle": float(self.idle),
             "wins": int(self.wins),
@@ -414,17 +472,30 @@ class Player:
                 if slot not in SLOTS or not isinstance(item, dict):
                     continue
                 try:
-                    items[slot] = {
-                        "name": str(item.get("name") or SLOT_LABELS.get(slot, "Item")),
-                        "slot": slot,
-                        "level": int(item.get("level") or 1),
-                        "unique": bool(item.get("unique")),
-                    }
+                    level_value = int(item.get("level") or 1)
+                    unique = bool(item.get("unique"))
+                    variant = int(item.get("variant") or 0)
                 except (TypeError, ValueError):
                     continue
+                slot_name = item.get("slot")
+                if slot_name not in SLOTS:
+                    slot_name = slot
+                items[slot_name] = {
+                    "name": _item_display_name(
+                        slot_name,
+                        level_value,
+                        unique,
+                        variant,
+                        str(item.get("name") or ""),
+                    ),
+                    "slot": slot_name,
+                    "level": level_value,
+                    "unique": unique,
+                    "variant": variant,
+                }
         return cls(
             name=str(data.get("name") or "Nameless"),
-            cls=str(data.get("cls") or "Adventurer"),
+            cls=_class_name(data.get("cls")),
             align=align,
             level=max(1, int(data.get("level") or 1)),
             ttl=float(data.get("ttl") or 0.0),

@@ -125,8 +125,10 @@ sent to a third party. `[p]mydata` returns the stored data as a JSON file,
 `[p]mydata forgetme` deletes it, and `[p]irpg unregister` removes the character
 as well.
 
-Characters are written back every 60 seconds and when the cog unloads, not on
-every tick, so a busy server does not hammer the config. A character whose
+Item names are derived from slot, level and a stored variant instead of being
+saved as text, so the name tables can change without old saves keeping stale
+names. Characters are written back every 60 seconds and when the cog unloads,
+not on every tick, so a busy server does not hammer the config. A character whose
 member leaves the server keeps its progress but stops accumulating time.
 
 ## Permissions
