@@ -1,17 +1,17 @@
-"""Reine Spiellogik für das IdleRPG-Cog — ohne ``discord``- oder ``redbot``-Importe.
+"""Pure game logic for the IdleRPG cog — no ``discord`` or ``redbot`` imports.
 
-Damit lassen sich alle Regeln ohne laufenden Bot prüfen: Zeitformeln, Strafen,
-Gegenstandswürfe, Kämpfe, Schicksalswahrscheinlichkeiten und die
-Serialisierung der Spielerfigur.
+Keeping the rules here means they can be exercised without a running bot:
+time formulas, penalties, item rolls, combat, fate probabilities and the
+serialization of a character.
 
-Die Formeln folgen dem IRC-Klassiker idlerpg.net, die Standardwerte sind aber
-auf einen Discord-Server abgestimmt (siehe ``DEFAULTS`` in ``idlerpg.py``):
+The formulas follow the IRC classic idlerpg.net, with defaults tuned for a
+Discord server (see ``DEFAULTS`` in ``idlerpg.py``):
 
-* Zeit bis zur nächsten Stufe: ``base * growth ** level``, ab ``cap_level``
-  linear mit ``cap_extra`` Sekunden pro weiterer Stufe.
-* Strafe für eine Nachricht: ``base * 1.14 ** level`` pro gezähltem Zeichen.
-* Gegenstand: Stufe 1 bis ``level * item_mult``, Gewicht ``1 / 1.4 ** n``.
-* Kampf: Summe der Gegenstandsstufen, je eine Zufallszahl, die größere gewinnt.
+* Time to the next level: ``base * growth ** level``, linear with
+  ``cap_extra`` seconds per level once ``cap_level`` is passed.
+* Penalty for a message: ``base * 1.14 ** level`` per counted character.
+* Item: level 1 to ``level * item_mult``, weight ``1 / 1.4 ** n``.
+* Battle: sum of item levels, one random number each, the higher one wins.
 """
 
 from __future__ import annotations
@@ -34,121 +34,91 @@ SLOTS: Tuple[str, ...] = (
 )
 
 SLOT_LABELS: Dict[str, str] = {
-    "weapon": "Waffe",
-    "shield": "Schild",
+    "weapon": "Weapon",
+    "shield": "Shield",
     "helm": "Helm",
-    "tunic": "Rüstung",
-    "gloves": "Handschuhe",
-    "leggings": "Beinschutz",
-    "boots": "Stiefel",
+    "tunic": "Armor",
+    "gloves": "Gloves",
+    "leggings": "Leggings",
+    "boots": "Boots",
     "ring": "Ring",
-    "amulet": "Amulett",
-    "charm": "Talisman",
+    "amulet": "Amulet",
+    "charm": "Charm",
 }
 
 ALIGNMENTS: Tuple[str, ...] = ("good", "neutral", "evil")
-ALIGN_LABELS: Dict[str, str] = {"good": "gut", "neutral": "neutral", "evil": "böse"}
+ALIGN_LABELS: Dict[str, str] = {"good": "good", "neutral": "neutral", "evil": "evil"}
 ALIGN_ICONS: Dict[str, str] = {"good": "🕊️", "neutral": "⚖️", "evil": "😈"}
 ALIGN_ALIASES: Dict[str, str] = {
     "good": "good",
-    "gut": "good",
     "neutral": "neutral",
     "evil": "evil",
-    "böse": "evil",
-    "boese": "evil",
 }
 
-# Trefferchance für einen kritischen Treffer je Gesinnung (IRPG: gut 1/50,
-# böse 1/20, neutral unverändert).
+# Critical strike chance per alignment (IRPG: good 1/50, evil 1/20, neutral
+# left unchanged).
 CRIT_CHANCE: Dict[str, float] = {"good": 1 / 50, "neutral": 1 / 35, "evil": 1 / 20}
 STEAL_CHANCE = 0.019
 
-# Gegenstandsnamen: Grundwort je Slot plus Genitivphrase je Stufe.
-# Die Genitivphrase richtet sich nach dem Suffix, nicht nach dem Grundwort —
-# damit stimmt das Geschlecht in jeder Kombination ("Klinge des Ritters",
-# "Rüstung des Ritters").
+# Item names: a noun per slot plus a genitive phrase per tier.  The phrase
+# carries its own article, so every combination reads correctly ("Blade of the
+# Knight", "Armor of the Knight").
 ITEM_NOUNS: Dict[str, Tuple[str, ...]] = {
-    "weapon": (
-        "Klinge",
-        "Axt",
-        "Streitkolben",
-        "Speer",
-        "Langschwert",
-        "Sense",
-        "Dolch",
-    ),
-    "shield": ("Schild", "Bollwerk", "Buckler", "Aegis", "Turmschild"),
-    "helm": ("Helm", "Krone", "Kapuze", "Visier", "Sturmhaube"),
-    "tunic": ("Rüstung", "Kettenhemd", "Wams", "Harnisch", "Mantel"),
-    "gloves": ("Handschuhe", "Stulpen", "Fäustlinge", "Pranken"),
-    "leggings": ("Beinschienen", "Gamaschen", "Schienen", "Beinkleid"),
-    "boots": ("Stiefel", "Treter", "Sandalen", "Schuhe"),
-    "ring": ("Ring", "Reif", "Siegelring"),
-    "amulet": ("Amulett", "Anhänger", "Medaillon"),
-    "charm": ("Talisman", "Glücksbringer", "Zauberzeichen"),
+    "weapon": ("Blade", "Axe", "Mace", "Spear", "Longsword", "Scythe", "Dagger"),
+    "shield": ("Shield", "Bulwark", "Buckler", "Aegis", "Tower Shield"),
+    "helm": ("Helm", "Crown", "Hood", "Visor", "Great Helm"),
+    "tunic": ("Armor", "Chainmail", "Jerkin", "Cuirass", "Cloak"),
+    "gloves": ("Gloves", "Gauntlets", "Mitts", "Paws"),
+    "leggings": ("Greaves", "Leggings", "Shin Guards", "Trousers"),
+    "boots": ("Boots", "Treads", "Sandals", "Shoes"),
+    "ring": ("Ring", "Band", "Signet Ring"),
+    "amulet": ("Amulet", "Pendant", "Medallion"),
+    "charm": ("Talisman", "Lucky Charm", "Ward"),
 }
 
 NAME_SUFFIXES: Tuple[Tuple[int, Tuple[str, ...]], ...] = (
-    (10, ("des Nachwuchses", "der Übung", "des Wanderers", "der ersten Schritte")),
-    (25, ("des Söldners", "der Wache", "des Rekruten", "der Grenzlande")),
-    (45, ("des Ritters", "der Dämmerung", "des Nordwinds", "der alten Straße")),
-    (70, ("des Kriegsfürsten", "der Glut", "des Gewitters", "der Belagerung")),
-    (100, ("des Erzmagiers", "der Finsternis", "des Himmels", "der Sternenschmiede")),
-    (10**9, ("der Ewigkeit", "des Weltbrands", "der Schöpfung", "des Abgrunds")),
+    (10, ("of the Novice", "of Practice", "of the Wanderer", "of First Steps")),
+    (25, ("of the Mercenary", "of the Watch", "of the Recruit", "of the Borderlands")),
+    (45, ("of the Knight", "of Dusk", "of the North Wind", "of the Old Road")),
+    (70, ("of the Warlord", "of Embers", "of the Thunderstorm", "of the Siege")),
+    (100, ("of the Archmage", "of Darkness", "of the Heavens", "of the Starsmith")),
+    (10**9, ("of Eternity", "of the Worldfire", "of Creation", "of the Abyss")),
 )
 
-# Einzigartige Gegenstände: feste Stufe im Bereich, Mindeststufe des Helden
-# und je 1/40 Chance pro Stufenaufstieg.
+# Unique items: fixed level range, minimum hero level and a 1/40 chance per
+# level-up.
 UNIQUES: Tuple[Dict[str, Any], ...] = (
-    {"name": "Krone der Allwissenheit", "slot": "helm", "lo": 50, "hi": 74, "req": 25},
+    {"name": "Crown of Omniscience", "slot": "helm", "lo": 50, "hi": 74, "req": 25},
+    {"name": "Ring of Sparkling Glory", "slot": "ring", "lo": 50, "hi": 74, "req": 25},
+    {"name": "Protector's Plate Mail", "slot": "tunic", "lo": 75, "hi": 99, "req": 30},
     {
-        "name": "Ring der funkelnden Glorie",
-        "slot": "ring",
-        "lo": 50,
-        "hi": 74,
-        "req": 25,
-    },
-    {
-        "name": "Plattenpanzer des Protektors",
-        "slot": "tunic",
-        "lo": 75,
-        "hi": 99,
-        "req": 30,
-    },
-    {
-        "name": "Amulett der Sturmessenz",
+        "name": "Amulet of Storm Essence",
         "slot": "amulet",
         "lo": 100,
         "hi": 124,
         "req": 35,
     },
     {
-        "name": "Kolossklinge des Jotuns",
+        "name": "Jotun's Colossal Blade",
         "slot": "weapon",
         "lo": 150,
         "hi": 174,
         "req": 40,
     },
-    {"name": "Stab der blinden Wut", "slot": "weapon", "lo": 175, "hi": 200, "req": 45},
-    {"name": "Stiefel der Flinkheit", "slot": "boots", "lo": 250, "hi": 300, "req": 48},
-    {
-        "name": "Streitkolben des Verderbens",
-        "slot": "weapon",
-        "lo": 300,
-        "hi": 350,
-        "req": 52,
-    },
+    {"name": "Cane of Blind Rage", "slot": "weapon", "lo": 175, "hi": 200, "req": 45},
+    {"name": "Boots of Swiftness", "slot": "boots", "lo": 250, "hi": 300, "req": 48},
+    {"name": "Cluehammer of Doom", "slot": "weapon", "lo": 300, "hi": 350, "req": 52},
 )
 
 QUEST_NAMES: Tuple[str, ...] = (
-    "Die verlorene Krone von Nebelthal",
-    "Der Pakt mit dem Frostriesen",
-    "Das Flüstern im alten Aquädukt",
-    "Die Rettung der Karawane",
-    "Der Schlüssel zur Sternenschmiede",
-    "Das Erwachen der glutroten Schlucht",
-    "Die letzte Wache am Nordwall",
-    "Der Gesang der versunkenen Glocke",
+    "The Lost Crown of Mistvale",
+    "The Pact with the Frost Giant",
+    "Whispers in the Old Aqueduct",
+    "The Rescue of the Caravan",
+    "The Key to the Starsmith's Forge",
+    "The Wakening of the Ember Gorge",
+    "The Last Watch on the North Wall",
+    "The Song of the Sunken Bell",
 )
 
 
@@ -158,7 +128,7 @@ def _setting(settings: Dict[str, Any], key: str, default: Any) -> Any:
 
 
 def next_level_time(level: int, settings: Dict[str, Any]) -> float:
-    """Sekunden, die Stufe ``level`` bis zur nächsten Stufe braucht."""
+    """Seconds level ``level`` needs to reach the next level."""
     base = float(_setting(settings, "base_time", 300.0))
     growth = float(_setting(settings, "growth", 1.14))
     cap = int(_setting(settings, "cap_level", 50))
@@ -174,7 +144,7 @@ def next_level_time(level: int, settings: Dict[str, Any]) -> float:
 
 
 def penalty_time(level: int, base: float) -> float:
-    """Strafsekunden für ein Ereignis der Gewichtung ``base``."""
+    """Penalty seconds for an event of weight ``base``."""
     if base <= 0:
         return 0.0
     return float(base) * (1.14 ** max(1, int(level)))
@@ -185,7 +155,7 @@ def item_sum(items: Dict[str, Dict[str, Any]]) -> int:
 
 
 def effective_sum(player: "Player") -> float:
-    """Gegenstandssumme mit Gesinnungsbonus (gut +10 %, böse -10 %)."""
+    """Item sum with the alignment modifier (good +10 %, evil -10 %)."""
     total = float(player.item_sum())
     if player.align == "good":
         total *= 1.10
@@ -195,7 +165,7 @@ def effective_sum(player: "Player") -> float:
 
 
 def weighted_item_level(max_level: int, rng: random.Random) -> int:
-    """Stufe eines gefundenen Gegenstands, Gewicht ``1 / 1.4 ** n``."""
+    """Level of a found item, weighted ``1 / 1.4 ** n``."""
     max_level = max(1, int(max_level))
     q = 1.0 / 1.4
     total = q * (1.0 - q**max_level) / (1.0 - q)
@@ -216,17 +186,17 @@ def _suffix_for(level: int, rng: random.Random) -> str:
 
 
 def item_name(slot: str, level: int, rng: random.Random) -> str:
-    noun = rng.choice(ITEM_NOUNS.get(slot, ("Gegenstand",)))
+    noun = rng.choice(ITEM_NOUNS.get(slot, ("Item",)))
     return f"{noun} {_suffix_for(level, rng)}"
 
 
 def roll_item(
     level: int, settings: Dict[str, Any], rng: random.Random
 ) -> Dict[str, Any]:
-    """Einen Gegenstand für einen Aufstieg auf ``level`` würfeln.
+    """Roll an item for a level-up to ``level``.
 
-    Zuerst wird auf einen einzigartigen Gegenstand geprüft (falls aktiviert),
-    danach auf einen normalen Fund bis ``level * item_mult``.
+    Unique items are checked first (when enabled), then a regular find up to
+    ``level * item_mult``.
     """
     if _setting(settings, "uniques", True):
         for unique in UNIQUES:
@@ -251,7 +221,7 @@ def roll_item(
 
 
 def equip(player: "Player", item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Gegenstand anlegen, wenn er besser ist. Gibt den ersetzten zurück."""
+    """Equip an item if it is better. Returns the replaced one."""
     slot = item["slot"]
     current = player.items.get(slot)
     if current is not None and int(current.get("level", 0)) >= int(item["level"]):
@@ -262,7 +232,7 @@ def equip(player: "Player", item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 @dataclass
 class BattleResult:
-    """Ergebnis eines Kampfes, ohne die Spielerfigur zu verändern."""
+    """Result of a battle, without touching either character."""
 
     win: bool
     atk_roll: float
@@ -275,22 +245,14 @@ class BattleResult:
     steal_item: Optional[Dict[str, Any]] = None
     give_back: Optional[Dict[str, Any]] = None
 
-    @property
-    def atk_sum(self) -> float:
-        return self.atk_roll
-
-    @property
-    def def_sum(self) -> float:
-        return self.def_roll
-
 
 def battle(
     atk: "Player", dfn: "Player", settings: Dict[str, Any], rng: random.Random
 ) -> BattleResult:
-    """Kampf nach IRPG-Regeln auswerten.
+    """Resolve a battle with the IRPG rules.
 
-    ``atk_delta`` und ``def_delta`` sind Sekunden, die auf die Restzeit addiert
-    werden (positiv = Strafe, negativ = Belohnung).
+    ``atk_delta`` and ``def_delta`` are seconds added to the remaining time
+    (positive = penalty, negative = reward).
     """
     atk_power = effective_sum(atk)
     def_power = effective_sum(dfn)
@@ -345,7 +307,7 @@ def battle(
 
 
 def chance_per_tick(per_day: float, dt: float) -> float:
-    """Tageswahrscheinlichkeit auf ein Tickintervall umrechnen."""
+    """Convert a per-day probability to a tick interval."""
     if per_day <= 0:
         return 0.0
     per_day = min(1.0, float(per_day))
@@ -355,19 +317,19 @@ def chance_per_tick(per_day: float, dt: float) -> float:
 def fmt_duration(seconds: float) -> str:
     total = int(max(0.0, round(float(seconds))))
     if total < 60:
-        return f"{total} s"
+        return f"{total}s"
     days, rest = divmod(total, 86400)
     hours, rest = divmod(rest, 3600)
-    minutes, secs = divmod(rest, 60)
+    minutes, _ = divmod(rest, 60)
     parts: List[str] = []
     if days:
-        parts.append(f"{days} T")
+        parts.append(f"{days}d")
     if hours:
-        parts.append(f"{hours} Std")
+        parts.append(f"{hours}h")
     if minutes and len(parts) < 2:
-        parts.append(f"{minutes} Min")
+        parts.append(f"{minutes}m")
     if not parts:
-        parts.append(f"{secs} s")
+        parts.append(f"{total}s")
     return " ".join(parts[:2])
 
 
@@ -378,15 +340,15 @@ def bar(fraction: float, width: int = 14) -> str:
 
 
 def percent(fraction: float) -> str:
-    return f"{max(0.0, min(1.0, float(fraction))) * 100:.1f} %".replace(".", ",")
+    return f"{max(0.0, min(1.0, float(fraction))) * 100:.1f}%"
 
 
 @dataclass
 class Player:
-    """Eine Spielfigur. ``ttl`` sind die Restsekunden bis zur nächsten Stufe."""
+    """A character. ``ttl`` is the seconds remaining to the next level."""
 
     name: str
-    cls: str = "Abenteurer"
+    cls: str = "Adventurer"
     align: str = "neutral"
     level: int = 1
     ttl: float = 0.0
@@ -402,7 +364,7 @@ class Player:
     quest_sin: bool = False
     last_seen: float = 0.0
 
-    # -- abgeleitete Werte -------------------------------------------------
+    # -- derived values ---------------------------------------------------
     def next_time(self, settings: Dict[str, Any]) -> float:
         return next_level_time(self.level, settings)
 
@@ -417,7 +379,7 @@ class Player:
     def slot_item(self, slot: str) -> Optional[Dict[str, Any]]:
         return (self.items or {}).get(slot)
 
-    # -- Serialisierung ----------------------------------------------------
+    # -- serialization ----------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
@@ -453,9 +415,7 @@ class Player:
                     continue
                 try:
                     items[slot] = {
-                        "name": str(
-                            item.get("name") or SLOT_LABELS.get(slot, "Gegenstand")
-                        ),
+                        "name": str(item.get("name") or SLOT_LABELS.get(slot, "Item")),
                         "slot": slot,
                         "level": int(item.get("level") or 1),
                         "unique": bool(item.get("unique")),
@@ -463,8 +423,8 @@ class Player:
                 except (TypeError, ValueError):
                     continue
         return cls(
-            name=str(data.get("name") or "Namenlos"),
-            cls=str(data.get("cls") or "Abenteurer"),
+            name=str(data.get("name") or "Nameless"),
+            cls=str(data.get("cls") or "Adventurer"),
             align=align,
             level=max(1, int(data.get("level") or 1)),
             ttl=float(data.get("ttl") or 0.0),

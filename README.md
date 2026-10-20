@@ -271,22 +271,20 @@ Notes:
 
 The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Discord cog. Register a character and it levels purely by idling: every level-up finds an item, and the level-up may start a battle against anyone else present. No IRC server, no password — the Discord account *is* the login, and **every guild is its own realm** with its own settings.
 
-User-facing text is **German** (the home server is German); command and setting names stay English.
-
 ```
 [p]irpg set toggle            # turn this server's realm on
 [p]irpg panel #games          # post the button panel
-[p]irpg register Grimmwald Barde
+[p]irpg register Grimmwald Bard
 ```
 
-The panel carries four buttons — **Beitreten** (a modal asking for name and class), **Charakter**, **Rangliste**, **Reich** — and answers ephemerally. It keeps working after a restart.
+The panel carries four buttons — **Join** (a modal asking for name and class), **Character**, **Leaderboard**, **Realm** — and answers ephemerally. It keeps working after a restart.
 
 | Command | What it does |
 | --- | --- |
 | `[p]irpg register <name> [class]` | Create a character (name unique per server, 3–24 chars; class free-form, ≤ 30) |
 | `[p]irpg rename <name>` | Rename your character |
 | `[p]irpg unregister` | Delete your character (asks first) |
-| `[p]irpg align <gut\|neutral\|böse>` | Alignment: good +10 % item sum but rare crits, evil −10 % but crits at 1/20 |
+| `[p]irpg align <good\|neutral\|evil>` | Alignment: good +10 % item sum but rare crits, evil −10 % but crits at 1/20 |
 | `[p]irpg char` | Character sheet: level, progress bar, all ten item slots, record |
 | `[p]irpg top [page]` | Leaderboard, paginated |
 | `[p]irpg realm` | Realm overview: figures, present players, top three, running quest |

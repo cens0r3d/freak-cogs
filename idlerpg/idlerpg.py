@@ -1,27 +1,25 @@
-"""IdleRPG für Discord — registrieren, idlen, leveln.
+"""IdleRPG for Discord — register, idle, level up.
 
-Das Cog überträgt die Idee des IRC-Klassikers idlerpg.net auf Discord: Wer
-eine Figur registriert hat, levelt allein durchs Herumsitzen, findet bei jedem
-Aufstieg einen Gegenstand und kämpft gegen andere Anwesende. Statt eines
-Passworts zählt der Discord-Account, statt eines IRC-Kanals die Gilde — jedes
-Server-Reich ist eine eigene Welt.
+A port of the IRC classic idlerpg.net to Discord: a registered character
+levels purely by idling, finds an item on every level-up and fights whoever
+else is around. The Discord account replaces the password, the guild replaces
+the IRC channel — every server is its own realm.
 
-Alle Regeln sind pro Server einstellbar (`[p]irpg set …`), die Spiellogik
-selbst liegt ohne Framework-Abhängigkeiten in ``game.py``.
+Every rule is configurable per server (`[p]irpg set …`); the game logic itself
+lives in ``game.py`` without framework imports.
 
-Betriebsdetails, die man beim Ändern kennen sollte:
+Operational details worth knowing before changing anything:
 
-* Der Tick läuft alle 15 Sekunden und arbeitet nur auf dem In-Memory-Cache
-  (``self.players``). Geschrieben wird gebündelt alle 60 Sekunden und beim
-  Entladen — ein Tick pro Figur und Sekunde wäre sonst ein Config-Schreibzugriff
-  pro Sekunde.
-* "Online" heißt: die Figur gehört zur Gilde und der Member steckt im Cache.
-  Wer den Server verlässt, sammelt keine Zeit mehr, behält aber seine Figur.
-* Strafen kosten Zeit: eine Nachricht kostet ``penalty`` Sekunden pro Zeichen,
-  multipliziert mit ``1.14 ** Stufe``. Genau wie im Original ist Schweigen die
-  beste Strategie.
-* Ein Gilden-Check gehört an jeden Subcommand einzeln — ``set`` und ``admin``
-  sind Gruppen, deren Checks nicht an die Subcommands vererbt werden.
+* The tick runs every 15 seconds and only touches the in-memory cache
+  (``self.players``). It is written back every 60 seconds and on unload — a
+  per-player write on every tick would be one config write per second.
+* "Online" means the character belongs to the guild and the member is in the
+  cache. Leaving the server pauses the clock but keeps the character.
+* Penalties cost time: a message costs ``penalty`` seconds per character,
+  multiplied by ``1.14 ** level``. As in the original, silence is the best
+  strategy.
+* A guild gate belongs on every subcommand individually — ``set`` and
+  ``admin`` are groups, and group checks are not inherited by subcommands.
 """
 
 from __future__ import annotations
@@ -71,21 +69,21 @@ PANEL_COLOR = 0xE0B34C
 NAME_RE = re.compile(r"^[\w \-'.]{3,24}$", re.UNICODE)
 
 DEFAULTS: Dict[str, Any] = {
-    # Zeit bis zur nächsten Stufe: base * growth ** level, ab cap_level linear.
+    # Time to the next level: base * growth ** level, linear past cap_level.
     "base_time": 300.0,
     "growth": 1.14,
     "cap_level": 50,
     "cap_extra": 43200.0,
     "speed": 1.0,
     "max_level": 120,
-    # Gegenstände
+    # Items
     "item_mult": 1.5,
     "uniques": True,
-    # Kämpfe
+    # Battles
     "battles": True,
     "battle_low": 25,
     "npc": True,
-    # Schicksal (Wahrscheinlichkeit pro Tag)
+    # Fate (probability per day)
     "events": True,
     "godsend": 0.125,
     "calamity": 0.125,
@@ -100,17 +98,17 @@ DEFAULTS: Dict[str, Any] = {
     "quest_max_hours": 12,
     "quest_cooldown": 7200,
     "quest_fail": 15.0,
-    # Strafen
+    # Penalties
     "penalty": 1.0,
     "penalty_cap": 60,
     "penalty_leave": 0.0,
-    # Ausgabe
+    # Output
     "announce": True,
 }
 
 
 def admin_command(func):
-    """Gilden- und Verwaltungs-Check für einen einzelnen (Sub-)Command."""
+    """Guild and manage-server gate for a single (sub)command."""
 
     func = commands.admin_or_permissions(manage_guild=True)(func)
     func = commands.guild_only()(func)
@@ -118,9 +116,9 @@ def admin_command(func):
 
 
 class IdleRPG(commands.Cog):
-    """Idle-Rollenspiel: Figur registrieren, idlen, leveln, kämpfen."""
+    """Idle RPG: register a character, idle, level up, fight."""
 
-    __version__ = "1.0.2"
+    __version__ = "1.1.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -147,7 +145,7 @@ class IdleRPG(commands.Cog):
         self._rng = random.Random()
 
     # ------------------------------------------------------------------
-    # Lebenszyklus
+    # Lifecycle
     # ------------------------------------------------------------------
 
     async def cog_load(self) -> None:
@@ -173,7 +171,7 @@ class IdleRPG(commands.Cog):
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("IdleRPG: Tick für Gilde %s fehlgeschlagen", guild.id)
+                log.exception("IdleRPG: tick for guild %s failed", guild.id)
 
     @_ticker.before_loop
     async def _before_ticker(self) -> None:
@@ -188,7 +186,7 @@ class IdleRPG(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
-    # Datenzugriff
+    # Data access
     # ------------------------------------------------------------------
 
     async def _settings(self, guild: discord.Guild) -> Dict[str, Any]:
@@ -213,7 +211,9 @@ class IdleRPG(commands.Cog):
             try:
                 players[int(key)] = Player.from_dict(payload)
             except (TypeError, ValueError):
-                log.warning("IdleRPG: unlesbare Figur %s in Gilde %s", key, guild.id)
+                log.warning(
+                    "IdleRPG: unreadable character %s in guild %s", key, guild.id
+                )
         self.players[guild.id] = players
         return players
 
@@ -233,9 +233,7 @@ class IdleRPG(commands.Cog):
             try:
                 await self._save(guild_id)
             except Exception:
-                log.exception(
-                    "IdleRPG: Speichern für Gilde %s fehlgeschlagen", guild_id
-                )
+                log.exception("IdleRPG: saving guild %s failed", guild_id)
 
     async def _save_quest(self, guild_id: int, quest: Dict[str, Any]) -> None:
         self.quests[guild_id] = quest
@@ -244,7 +242,7 @@ class IdleRPG(commands.Cog):
             await self.config.guild_from_id(guild_id).quest.set(quest)
 
     # ------------------------------------------------------------------
-    # Der Tick
+    # The tick
     # ------------------------------------------------------------------
 
     async def _tick_guild(self, guild: discord.Guild, now: float) -> None:
@@ -295,7 +293,7 @@ class IdleRPG(commands.Cog):
         conf: Dict[str, Any],
         lines: List[str],
     ) -> None:
-        """Stufenaufstiege abarbeiten (mehrere, wenn viel Zeit aufgelaufen ist)."""
+        """Handle level-ups (several when a lot of time piled up)."""
         max_level = int(conf.get("max_level", 120))
         guard = 0
         while player.ttl <= 0 and player.level < max_level and guard < 20:
@@ -307,18 +305,18 @@ class IdleRPG(commands.Cog):
 
             item = roll_item(player.level, conf, self._rng)
             previous = equip(player, item)
-            label = SLOT_LABELS.get(item["slot"], "Gegenstand")
-            marker = " ✨ **einzigartig**" if item.get("unique") else ""
+            label = SLOT_LABELS.get(item["slot"], "Item")
+            marker = " ✨ **unique**" if item.get("unique") else ""
             if previous is None:
                 lines.append(
-                    f"🎉 **{player.name}** erreicht **Stufe {player.level}** und findet "
-                    f"{label}: **{item['name']}** (Stufe {item['level']}){marker}"
+                    f"🎉 **{player.name}** reaches **level {player.level}** and finds "
+                    f"{label}: **{item['name']}** (level {item['level']}){marker}"
                 )
             else:
                 lines.append(
-                    f"🎉 **{player.name}** erreicht **Stufe {player.level}** und tauscht "
-                    f"{label} **{previous['name']}** ({previous['level']}) gegen "
-                    f"**{item['name']}** (Stufe {item['level']}){marker}"
+                    f"🎉 **{player.name}** reaches **level {player.level}** and trades "
+                    f"{label} **{previous['name']}** ({previous['level']}) for "
+                    f"**{item['name']}** (level {item['level']}){marker}"
                 )
 
             if conf.get("battles", True):
@@ -357,16 +355,16 @@ class IdleRPG(commands.Cog):
             atk.wins += 1
             defender.losses += 1
             lines.append(
-                f"⚔️ **{atk.name}** (Summe {int(effective_sum(atk))}) besiegt "
+                f"⚔️ **{atk.name}** (sum {int(effective_sum(atk))}) defeats "
                 f"**{defender.name}** ({int(effective_sum(defender))}) — "
-                f"{result.percent * 100:.0f} % schneller Richtung Stufe {atk.level + 1}."
+                f"{result.percent * 100:.0f}% faster toward level {atk.level + 1}."
             )
             if result.crit:
                 atk.crits += 1
                 defender.ttl += result.def_delta
                 lines.append(
-                    f"💥 Kritischer Treffer! **{defender.name}** verliert zusätzlich "
-                    f"{result.def_delta / max(1.0, defender.next_time(conf)) * 100:.0f} %."
+                    f"💥 Critical strike! **{defender.name}** loses another "
+                    f"{result.def_delta / max(1.0, defender.next_time(conf)) * 100:.0f}%."
                 )
             if result.steal_slot and result.steal_item:
                 slot = result.steal_slot
@@ -378,27 +376,27 @@ class IdleRPG(commands.Cog):
                     defender.items[slot] = given
                 atk.steals += 1
                 lines.append(
-                    f"🖐️ **{atk.name}** stiehlt **{defender.name}** "
-                    f"{SLOT_LABELS.get(slot, 'Gegenstand')} **{result.steal_item['name']}** "
-                    f"(Stufe {result.steal_item['level']})."
+                    f"🖐️ **{atk.name}** steals **{defender.name}**'s "
+                    f"{SLOT_LABELS.get(slot, 'item')} **{result.steal_item['name']}** "
+                    f"(level {result.steal_item['level']})."
                 )
         else:
             atk.losses += 1
             defender.wins += 1
             lines.append(
-                f"💀 **{atk.name}** verliert gegen **{defender.name}** — "
-                f"{result.percent * 100:.0f} % Rückstand auf Stufe {atk.level + 1}."
+                f"💀 **{atk.name}** loses to **{defender.name}** — "
+                f"{result.percent * 100:.0f}% behind toward level {atk.level + 1}."
             )
 
     def _shadow(self, atk: Player, players: Dict[int, Player]) -> Player:
-        """Ersatzgegner, wenn sonst niemand da ist (wie der IRPG-Bot)."""
+        """Stand-in opponent when nobody else is around (like the IRPG bot)."""
         best = max((player.item_sum() for player in players.values()), default=0)
         shadow = Player(
-            name="Schatten des Reiches", cls="Erscheinung", level=max(1, atk.level)
+            name="Shadow of the Realm", cls="Apparition", level=max(1, atk.level)
         )
         shadow.items = {
             "weapon": {
-                "name": "Schattenklinge",
+                "name": "Shadowblade",
                 "slot": "weapon",
                 "level": max(1, best + 1),
                 "unique": False,
@@ -414,7 +412,7 @@ class IdleRPG(commands.Cog):
         dt: float,
         lines: List[str],
     ) -> None:
-        """Hand Gottes, Geschenke, Unheil und Teamkämpfe."""
+        """Hand of God, godsends, calamities and team battles."""
         need = player.next_time(conf)
 
         if self._rng.random() < chance_per_tick(float(conf.get("hog", 0.05)), dt):
@@ -422,14 +420,14 @@ class IdleRPG(commands.Cog):
             if self._rng.random() < 0.8:
                 player.ttl -= need * shift
                 lines.append(
-                    f"✨ Die Hand Gottes führt **{player.name}** — "
-                    f"{shift * 100:.0f} % schneller."
+                    f"✨ The Hand of God guides **{player.name}** — "
+                    f"{shift * 100:.0f}% faster."
                 )
             else:
                 player.ttl += need * shift
                 lines.append(
-                    f"⚡ Die Hand Gottes zürnt **{player.name}** — "
-                    f"{shift * 100:.0f} % langsamer."
+                    f"⚡ The Hand of God smites **{player.name}** — "
+                    f"{shift * 100:.0f}% slower."
                 )
 
         if self._rng.random() < chance_per_tick(float(conf.get("godsend", 0.125)), dt):
@@ -437,16 +435,15 @@ class IdleRPG(commands.Cog):
             if not player.items or self._rng.random() < 0.5:
                 player.ttl -= need * shift
                 lines.append(
-                    f"🌟 Ein Geschenk der Götter: **{player.name}** ist "
-                    f"{shift * 100:.0f} % schneller."
+                    f"🌟 A godsend: **{player.name}** is " f"{shift * 100:.0f}% faster."
                 )
             else:
                 slot = self._rng.choice(list(player.items))
                 item = player.items[slot]
                 item["level"] = max(1, int(round(int(item["level"]) * 1.10)))
                 lines.append(
-                    f"🌟 Ein Geschenk der Götter: **{item['name']}** von **{player.name}** "
-                    f"wird auf Stufe {item['level']} aufgewertet."
+                    f"🌟 A godsend: **{player.name}**'s **{item['name']}** "
+                    f"is upgraded to level {item['level']}."
                 )
 
         if self._rng.random() < chance_per_tick(float(conf.get("calamity", 0.125)), dt):
@@ -454,16 +451,16 @@ class IdleRPG(commands.Cog):
             if not player.items or self._rng.random() < 0.5:
                 player.ttl += need * shift
                 lines.append(
-                    f"🌑 Ein Unglück trifft **{player.name}** — "
-                    f"{shift * 100:.0f} % langsamer."
+                    f"🌑 A calamity strikes **{player.name}** — "
+                    f"{shift * 100:.0f}% slower."
                 )
             else:
                 slot = self._rng.choice(list(player.items))
                 item = player.items[slot]
                 item["level"] = max(1, int(round(int(item["level"]) * 0.90)))
                 lines.append(
-                    f"🌑 Ein Unglück: **{item['name']}** von **{player.name}** "
-                    f"verliert Stufe — jetzt {item['level']}."
+                    f"🌑 A calamity: **{player.name}**'s **{item['name']}** "
+                    f"drops to level {item['level']}."
                 )
 
         if (
@@ -491,8 +488,8 @@ class IdleRPG(commands.Cog):
             names_win = humanize_list([f"**{member.name}**" for member in winner[:3]])
             names_lose = humanize_list([f"**{member.name}**" for member in loser[:3]])
             lines.append(
-                f"🛡️ Teamkampf: {names_win} besiegen {names_lose} — "
-                f"{fmt_duration(gain)} gutgeschrieben bzw. abgezogen."
+                f"🛡️ Team battle: {names_win} defeat {names_lose} — "
+                f"{fmt_duration(gain)} awarded and lost."
             )
 
     async def _quest_tick(
@@ -525,8 +522,8 @@ class IdleRPG(commands.Cog):
                 for player in online.values():
                     player.ttl += penalty_time(player.level, penalty)
                 lines.append(
-                    f"💀 Die Quest **{quest.get('name', '?')}** ist gescheitert — "
-                    "das Reich bestraft alle Anwesenden."
+                    f"💀 The quest **{quest.get('name', '?')}** has failed — "
+                    "the realm punishes everyone present."
                 )
             else:
                 for member in members:
@@ -534,8 +531,8 @@ class IdleRPG(commands.Cog):
                     member.quest_sin = False
                 names = humanize_list([f"**{member.name}**" for member in members])
                 lines.append(
-                    f"🏆 Die Quest **{quest.get('name', '?')}** ist erfüllt: {names} "
-                    "sind 25 % schneller."
+                    f"🏆 The quest **{quest.get('name', '?')}** is complete: {names} "
+                    "are 25% faster."
                 )
             await self._save_quest(guild.id, {})
             self._next_quest[guild.id] = now + float(conf.get("quest_cooldown", 7200))
@@ -575,8 +572,8 @@ class IdleRPG(commands.Cog):
         await self._save_quest(guild.id, quest)
         names = humanize_list([f"**{player.name}**" for _, player in chosen])
         lines.append(
-            f"🗺️ Neue Quest: **{quest['name']}** — {names} ziehen los. "
-            f"{hours:.0f} Stunden, keine Strafe erlaubt."
+            f"🗺️ New quest: **{quest['name']}** — {names} set out. "
+            f"{hours:.0f} hours, no penalties allowed."
         )
 
     async def _announce(
@@ -594,7 +591,7 @@ class IdleRPG(commands.Cog):
 
         text = "\n".join(list(lines)[:10])
         if len(lines) > 10:
-            text += f"\n… und {len(lines) - 10} weitere Ereignisse."
+            text += f"\n… and {len(lines) - 10} more events."
         with contextlib.suppress(discord.HTTPException):
             await channel.send(
                 text[:1900], allowed_mentions=discord.AllowedMentions.none()
@@ -606,7 +603,7 @@ class IdleRPG(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """Reden kostet Zeit — genau wie im Original."""
+        """Talking costs time — exactly like the original."""
         if message.guild is None or message.author.bot:
             return
         players = self.players.get(message.guild.id)
@@ -641,7 +638,7 @@ class IdleRPG(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        """Beim Verlassen des Servers optional eine Strafe verbuchen."""
+        """Optionally book a penalty when a member leaves the server."""
         if member.bot or member.guild is None:
             return
         players = self.players.get(member.guild.id)
@@ -659,7 +656,7 @@ class IdleRPG(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
-        """Löscht der Ansage-Kanal, wird die Referenz darauf entfernt."""
+        """When the announcement channel is deleted, drop the reference."""
         conf = await self.config.guild(channel.guild).channel()
         if conf == channel.id:
             await self.config.guild(channel.guild).channel.set(None)
@@ -702,16 +699,16 @@ class IdleRPG(commands.Cog):
             self._dirty.discard(guild_id)
 
     # ------------------------------------------------------------------
-    # Darstellung
+    # Rendering
     # ------------------------------------------------------------------
 
     async def _colour(self, ctx: Optional[commands.Context] = None) -> discord.Colour:
-        """Red's ``ctx.embed_color`` ist eine Property, die eine Coroutine liefert.
+        """Red's ``ctx.embed_color`` is a property that returns a coroutine.
 
-        ``await ctx.embed_color()`` ist der einzig gültige Aufruf: ein direktes
-        Weiterreichen der Property schiebt die Methode als Farbe in den Embed und
-        discord.py wirft ``TypeError: Expected discord.Colour … but received
-        method``.  Fehlt der Kontext (Panel-Views), gilt die Hausfarbe.
+        ``await ctx.embed_color()`` is the only valid call: handing the property
+        straight to ``discord.Embed`` passes the method as the colour and
+        discord.py raises ``TypeError: Expected discord.Colour … but received
+        method``.  Without a context (panel views) the house colour applies.
         """
         fallback = discord.Colour(PANEL_COLOR)
         if ctx is None:
@@ -739,34 +736,32 @@ class IdleRPG(commands.Cog):
         progress = player.progress(conf)
         max_level = int(conf.get("max_level", 120))
         if player.level >= max_level:
-            remaining = "Maximalstufe erreicht"
+            remaining = "maximum level reached"
         else:
-            remaining = f"noch {fmt_duration(player.ttl)} bis Stufe {player.level + 1}"
+            remaining = f"{fmt_duration(player.ttl)} to level {player.level + 1}"
         embed = discord.Embed(
             title=f"{ALIGN_ICONS.get(player.align, '⚖️')} {player.name}",
             description=(
                 f"*{player.cls}* · {ALIGN_LABELS.get(player.align, 'neutral')} · "
-                f"Stufe **{player.level}**"
+                f"level **{player.level}**"
             ),
             colour=colour or discord.Colour(PANEL_COLOR),
         )
         embed.add_field(
-            name="Fortschritt",
+            name="Progress",
             value=(f"`{bar(progress)}` {percent(progress)}\n{remaining}"),
             inline=False,
         )
+        embed.add_field(name="Item sum", value=f"**{player.item_sum()}**", inline=True)
         embed.add_field(
-            name="Gegenstandssumme", value=f"**{player.item_sum()}**", inline=True
+            name="Battles", value=f"{player.wins} W / {player.losses} L", inline=True
         )
         embed.add_field(
-            name="Kämpfe", value=f"{player.wins} S / {player.losses} N", inline=True
-        )
-        embed.add_field(
-            name="Bilanz",
+            name="Record",
             value=(
-                f"{player.levels_gained} Aufstiege · {player.crits} Krits · "
-                f"{player.steals} Diebstähle · {player.penalties} Strafen\n"
-                f"geidlet: {fmt_duration(player.idle)}"
+                f"{player.levels_gained} level-ups · {player.crits} crits · "
+                f"{player.steals} steals · {player.penalties} penalties\n"
+                f"idled: {fmt_duration(player.idle)}"
             ),
             inline=False,
         )
@@ -782,7 +777,7 @@ class IdleRPG(commands.Cog):
                     f"{SLOT_LABELS[slot]}: {marker}**{item['name']}** ({item['level']})"
                 )
         embed.add_field(
-            name="Ausrüstung", value="\n".join(equipment)[:1024], inline=False
+            name="Equipment", value="\n".join(equipment)[:1024], inline=False
         )
         return embed
 
@@ -798,34 +793,34 @@ class IdleRPG(commands.Cog):
         top = sorted(players.values(), key=lambda p: (-p.level, p.ttl))[:3]
         best = (
             "\n".join(
-                f"`{index}.` **{player.name}** — Stufe {player.level} · Items {player.item_sum()}"
+                f"`{index}.` **{player.name}** — level {player.level} · items {player.item_sum()}"
                 for index, player in enumerate(top, start=1)
             )
-            or "*Noch niemand im Reich.*"
+            or "*Nobody in the realm yet.*"
         )
 
         if quest:
             left = max(0.0, float(quest.get("end", 0)) - time.time())
-            quest_text = f"**{quest.get('name', '?')}** · {fmt_duration(left)} übrig"
+            quest_text = f"**{quest.get('name', '?')}** · {fmt_duration(left)} left"
         else:
-            quest_text = "*keine*"
+            quest_text = "*none*"
 
         embed = discord.Embed(
-            title="⚔️ Das Reich",
+            title="⚔️ The Realm",
             description=(
-                f"{len(players)} Figuren · {online} davon anwesend\n"
-                f"Tempo: Faktor {conf.get('speed', 1.0):g} · "
-                f"Stufe 1 in {fmt_duration(next_level_time(1, conf))}"
+                f"{len(players)} characters · {online} present\n"
+                f"Pace: factor {conf.get('speed', 1.0):g} · "
+                f"level 1 in {fmt_duration(next_level_time(1, conf))}"
             ),
             colour=colour or discord.Colour(PANEL_COLOR),
         )
-        embed.add_field(name="Spitze", value=best, inline=False)
+        embed.add_field(name="Top", value=best, inline=False)
         embed.add_field(name="Quest", value=quest_text, inline=False)
         embed.add_field(
-            name="Regeln",
+            name="Rules",
             value=(
-                "Wer registriert ist, levelt durchs Herumsitzen. "
-                "Jede Nachricht kostet Zeit, Kämpfe entscheiden die Gegenstände."
+                "Everyone registered levels by idling. "
+                "Every message costs time, battles decide the items."
             ),
             inline=False,
         )
@@ -847,51 +842,51 @@ class IdleRPG(commands.Cog):
                 rank = page_index * 10 + offset + 1
                 badge = medals.get(rank, f"`{rank:>2}.`")
                 lines.append(
-                    f"{badge} **{player.name}** — Stufe {player.level} · "
-                    f"Items {player.item_sum()} · {percent(player.progress(conf))}"
+                    f"{badge} **{player.name}** — level {player.level} · "
+                    f"items {player.item_sum()} · {percent(player.progress(conf))}"
                 )
             embed = discord.Embed(
-                title="🏆 Rangliste",
-                description="\n".join(lines) or "*Noch niemand im Reich.*",
+                title="🏆 Leaderboard",
+                description="\n".join(lines) or "*Nobody in the realm yet.*",
                 colour=discord.Colour(PANEL_COLOR),
             )
             embed.set_footer(
-                text=f"Seite {page_index + 1}/{len(chunks)} · {len(ordered)} Figuren"
+                text=f"Page {page_index + 1}/{len(chunks)} · {len(ordered)} characters"
             )
             pages.append(embed)
         return pages
 
     # ------------------------------------------------------------------
-    # Registrierung
+    # Registration
     # ------------------------------------------------------------------
 
     async def _register(
-        self, guild: discord.Guild, user_id: int, name: str, klasse: str
+        self, guild: discord.Guild, user_id: int, name: str, char_class: str
     ) -> Tuple[Optional[Player], Optional[str]]:
         name = (name or "").strip()
-        klasse = (klasse or "").strip() or "Abenteurer"
+        char_class = (char_class or "").strip() or "Adventurer"
         if not NAME_RE.match(name):
             return (
                 None,
-                "Der Name muss 3–24 Zeichen haben (Buchstaben, Zahlen, Leerzeichen, `-`).",
+                "Name must be 3–24 characters (letters, digits, spaces, `-`).",
             )
-        if name.casefold() == "schatten des reiches":
-            return None, "Dieser Name ist besetzt."
-        if len(klasse) > 30:
-            return None, "Die Klasse darf höchstens 30 Zeichen haben."
+        if name.casefold() == "shadow of the realm":
+            return None, "That name is reserved."
+        if len(char_class) > 30:
+            return None, "Class must be at most 30 characters."
 
         players = await self._players(guild)
         if user_id in players:
-            return None, f"Du hast schon eine Figur: **{players[user_id].name}**."
+            return None, f"You already have a character: **{players[user_id].name}**."
         if any(
             player.name.casefold() == name.casefold() for player in players.values()
         ):
-            return None, f"Der Name **{name}** ist schon vergeben."
+            return None, f"The name **{name}** is taken."
 
         conf = await self._settings(guild)
         player = Player(
             name=name,
-            cls=klasse,
+            cls=char_class,
             created=time.time(),
             last_seen=time.time(),
         )
@@ -906,20 +901,20 @@ class IdleRPG(commands.Cog):
             member = guild.get_member(user_id)
             if role is not None and member is not None:
                 with contextlib.suppress(discord.HTTPException, discord.Forbidden):
-                    await member.add_roles(role, reason="IdleRPG: Figur registriert")
+                    await member.add_roles(role, reason="IdleRPG: character registered")
 
         return player, None
 
     async def _join_from_interaction(
-        self, interaction: discord.Interaction, name: str, klasse: Optional[str]
+        self, interaction: discord.Interaction, name: str, char_class: Optional[str]
     ) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(
-                "Das Reich gibt es nur auf einem Server.", ephemeral=True
+                "The realm only exists on a server.", ephemeral=True
             )
             return
         player, error = await self._register(
-            interaction.guild, interaction.user.id, name, klasse or ""
+            interaction.guild, interaction.user.id, name, char_class or ""
         )
         if player is None:
             await interaction.response.send_message(f"❌ {error}", ephemeral=True)
@@ -928,8 +923,8 @@ class IdleRPG(commands.Cog):
         await interaction.response.send_message(
             embed=self._char_embed(player, conf),
             content=(
-                f"Willkommen im Reich, **{player.name}**! Deine Zeit läuft ab jetzt — "
-                "Schweigen bringt dich schneller voran."
+                f"Welcome to the realm, **{player.name}**! Your clock is running — "
+                "staying quiet gets you further."
             ),
             ephemeral=True,
         )
@@ -940,12 +935,12 @@ class IdleRPG(commands.Cog):
 
     async def _gate(self, ctx: commands.Context) -> bool:
         if ctx.guild is None:
-            await ctx.send("IdleRPG läuft nur auf einem Server.")
+            await ctx.send("IdleRPG only runs on a server.")
             return False
         if not await self.config.guild(ctx.guild).enabled():
             await ctx.send(
-                f"IdleRPG ist hier noch aus. Ein Admin kann es mit "
-                f"`{ctx.clean_prefix}irpg set toggle` einschalten."
+                "IdleRPG is not enabled here. An admin can turn it on with "
+                f"`{ctx.clean_prefix}irpg set toggle`."
             )
             return False
         return True
@@ -953,75 +948,76 @@ class IdleRPG(commands.Cog):
     @commands.group(name="idlerpg", aliases=["irpg"], invoke_without_command=True)
     @commands.guild_only()
     async def idlerpg(self, ctx: commands.Context) -> None:
-        """Idle-Rollenspiel: registrieren, idlen, leveln."""
+        """Idle RPG: register a character, idle, level up."""
         await ctx.send_help(ctx.command)
 
-    @idlerpg.command(name="register", aliases=["join", "beitreten", "start"])
+    @idlerpg.command(name="register", aliases=["join", "start"])
     @commands.guild_only()
     async def register(
-        self, ctx: commands.Context, name: str, *, klasse: str = ""
+        self, ctx: commands.Context, name: str, *, char_class: str = ""
     ) -> None:
-        """Figur anlegen: `[p]irpg register <Name> [Klasse]`."""
+        """Create a character: `[p]irpg register <name> [class]`."""
         if not await self._gate(ctx):
             return
-        player, error = await self._register(ctx.guild, ctx.author.id, name, klasse)
+        player, error = await self._register(ctx.guild, ctx.author.id, name, char_class)
         if player is None:
             await ctx.send(f"❌ {error}")
             return
         conf = await self._settings(ctx.guild)
         await ctx.send(
-            content=f"⚔️ **{player.name}** betritt das Reich.",
+            content=f"⚔️ **{player.name}** enters the realm.",
             embed=self._char_embed(player, conf, await self._colour(ctx)),
         )
 
-    @idlerpg.command(name="rename", aliases=["umbenennen"])
+    @idlerpg.command(name="rename")
     @commands.guild_only()
     async def rename(self, ctx: commands.Context, name: str) -> None:
-        """Figur umbenennen."""
+        """Rename your character."""
         if not await self._gate(ctx):
             return
         players = await self._players(ctx.guild)
         player = players.get(ctx.author.id)
         if player is None:
-            await ctx.send("Du hast noch keine Figur — `[p]irpg register <Name>`.")
+            await ctx.send(
+                "You don't have a character yet — `[p]irpg register <name>`."
+            )
             return
         name = name.strip()
         if not NAME_RE.match(name):
-            await ctx.send("Der Name muss 3–24 Zeichen haben.")
+            await ctx.send("Name must be 3–24 characters.")
             return
         if any(
             other.name.casefold() == name.casefold() and other is not player
             for other in players.values()
         ):
-            await ctx.send(f"Der Name **{name}** ist schon vergeben.")
+            await ctx.send(f"The name **{name}** is taken.")
             return
         old = player.name
         player.name = name
         self._dirty.add(ctx.guild.id)
         await self._save(ctx.guild.id)
-        await ctx.send(f"**{old}** heißt jetzt **{name}**.")
+        await ctx.send(f"**{old}** is now **{name}**.")
 
-    @idlerpg.command(name="unregister", aliases=["leave", "verlassen", "austreten"])
+    @idlerpg.command(name="unregister", aliases=["leave", "quit"])
     @commands.guild_only()
     async def unregister(self, ctx: commands.Context) -> None:
-        """Figur löschen (mit Rückfrage)."""
+        """Delete your character (asks first)."""
         if not await self._gate(ctx):
             return
         players = await self._players(ctx.guild)
         player = players.get(ctx.author.id)
         if player is None:
-            await ctx.send("Du hast keine Figur.")
+            await ctx.send("You don't have a character.")
             return
 
         view = ConfirmView(ctx.author, disable_buttons=True)
         view.message = await ctx.send(
-            f"Figur **{player.name}** (Stufe {player.level}) wirklich löschen? "
-            "Der Fortschritt ist danach weg.",
+            f"Delete **{player.name}** (level {player.level})? All progress is lost.",
             view=view,
         )
         await view.wait()
         if not view.result:
-            await ctx.send("Alles bleibt, wie es ist.")
+            await ctx.send("Nothing changed.")
             return
 
         players.pop(ctx.author.id, None)
@@ -1031,72 +1027,73 @@ class IdleRPG(commands.Cog):
         role = ctx.guild.get_role(role_id) if role_id else None
         if role is not None and isinstance(ctx.author, discord.Member):
             with contextlib.suppress(discord.HTTPException, discord.Forbidden):
-                await ctx.author.remove_roles(role, reason="IdleRPG: Figur gelöscht")
-        await ctx.send(f"**{player.name}** verlässt das Reich.")
+                await ctx.author.remove_roles(role, reason="IdleRPG: character deleted")
+        await ctx.send(f"**{player.name}** leaves the realm.")
 
-    @idlerpg.command(name="align", aliases=["gesinnung"])
+    @idlerpg.command(name="align")
     @commands.guild_only()
-    async def align(self, ctx: commands.Context, gesinnung: str) -> None:
-        """Gesinnung wählen: `gut`, `neutral` oder `böse`."""
+    async def align(self, ctx: commands.Context, alignment: str) -> None:
+        """Choose an alignment: `good`, `neutral` or `evil`."""
         if not await self._gate(ctx):
             return
         players = await self._players(ctx.guild)
         player = players.get(ctx.author.id)
         if player is None:
-            await ctx.send("Du hast noch keine Figur.")
+            await ctx.send("You don't have a character yet.")
             return
-        choice = ALIGN_ALIASES.get(gesinnung.casefold())
+        choice = ALIGN_ALIASES.get(alignment.casefold())
         if choice is None:
-            await ctx.send("Bitte `gut`, `neutral` oder `böse` angeben.")
+            await ctx.send("Pick `good`, `neutral` or `evil`.")
             return
         if choice == player.align:
-            await ctx.send(f"Du bist schon {ALIGN_LABELS[choice]}.")
+            await ctx.send(f"You are already {ALIGN_LABELS[choice]}.")
             return
         player.align = choice
         self._dirty.add(ctx.guild.id)
         await self._save(ctx.guild.id)
         hints = {
-            "good": "Kämpfe +10 % Gegenstandssumme, dafür seltener Krits.",
-            "neutral": "Keine Boni, keine Mali.",
-            "evil": "Kämpfe −10 % Gegenstandssumme, dafür Krits 1/20.",
+            "good": "Battles +10% item sum, but crits are rare.",
+            "neutral": "No bonuses, no penalties.",
+            "evil": "Battles −10% item sum, but crits at 1/20.",
         }
         await ctx.send(
-            f"{ALIGN_ICONS[choice]} **{player.name}** ist jetzt {ALIGN_LABELS[choice]}. "
+            f"{ALIGN_ICONS[choice]} **{player.name}** is now {ALIGN_LABELS[choice]}. "
             f"{hints[choice]}"
         )
 
-    @idlerpg.command(name="char", aliases=["me", "whoami", "figur"])
+    @idlerpg.command(name="char", aliases=["me", "whoami", "sheet"])
     @commands.guild_only()
     async def char(self, ctx: commands.Context) -> None:
-        """Eigene Figur anzeigen."""
+        """Show your character."""
         if not await self._gate(ctx):
             return
         players = await self._players(ctx.guild)
         player = players.get(ctx.author.id)
         if player is None:
             await ctx.send(
-                f"Du hast noch keine Figur — `{ctx.clean_prefix}irpg register <Name>`."
+                f"You don't have a character yet — "
+                f"`{ctx.clean_prefix}irpg register <name>`."
             )
             return
         conf = await self._settings(ctx.guild)
         await ctx.send(embed=self._char_embed(player, conf, await self._colour(ctx)))
 
-    @idlerpg.command(name="top", aliases=["rangliste", "leaderboard", "rang"])
+    @idlerpg.command(name="top", aliases=["leaderboard", "rank"])
     @commands.guild_only()
-    async def top(self, ctx: commands.Context, seite: int = 1) -> None:
-        """Rangliste anzeigen."""
+    async def top(self, ctx: commands.Context, page: int = 1) -> None:
+        """Show the leaderboard."""
         if not await self._gate(ctx):
             return
         conf = await self._settings(ctx.guild)
         pages = await self._rank_pages(ctx.guild, conf)
-        index = max(0, min(len(pages) - 1, seite - 1))
+        index = max(0, min(len(pages) - 1, page - 1))
         view = RankView(ctx.author.id, pages, index)
         view.message = await ctx.send(embed=pages[index], view=view)
 
-    @idlerpg.command(name="realm", aliases=["reich", "status"])
+    @idlerpg.command(name="realm", aliases=["status"])
     @commands.guild_only()
     async def realm(self, ctx: commands.Context) -> None:
-        """Überblick über das Reich."""
+        """Realm overview."""
         if not await self._gate(ctx):
             return
         conf = await self._settings(ctx.guild)
@@ -1111,10 +1108,10 @@ class IdleRPG(commands.Cog):
             )
         )
 
-    @idlerpg.command(name="quest", aliases=["abenteuer"])
+    @idlerpg.command(name="quest")
     @commands.guild_only()
     async def quest(self, ctx: commands.Context) -> None:
-        """Aktuelle Quest anzeigen."""
+        """Show the active quest."""
         if not await self._gate(ctx):
             return
         conf = await self._settings(ctx.guild)
@@ -1132,11 +1129,11 @@ class IdleRPG(commands.Cog):
                 and player.idle >= float(conf.get("quest_min_idle_hours", 6)) * 3600
             )
             await ctx.send(
-                "Gerade zieht niemand los. Eine Quest startet automatisch, sobald "
-                f"**{conf.get('quest_size', 3)}** Figuren ab Stufe "
-                f"**{conf.get('quest_min_level', 20)}** je "
-                f"**{conf.get('quest_min_idle_hours', 6)} Std** geidlet haben "
-                f"(aktuell {eligible} bereit)."
+                "Nobody is on a quest right now. One starts automatically once "
+                f"**{conf.get('quest_size', 3)}** characters at level "
+                f"**{conf.get('quest_min_level', 20)}** have idled for "
+                f"**{conf.get('quest_min_idle_hours', 6)}h** "
+                f"(currently {eligible} ready)."
             )
             return
 
@@ -1148,17 +1145,17 @@ class IdleRPG(commands.Cog):
         left = max(0.0, float(quest.get("end", 0)) - time.time())
         await ctx.send(
             f"🗺️ **{quest.get('name', '?')}**\n"
-            f"Beteiligt: {humanize_list([f'**{name}**' for name in members]) or '—'}\n"
-            f"Noch {fmt_duration(left)}. Wer in dieser Zeit eine Strafe kassiert, "
-            "lässt die ganze Quest scheitern."
+            f"Members: {humanize_list([f'**{name}**' for name in members]) or '—'}\n"
+            f"{fmt_duration(left)} left. Anyone who takes a penalty in that time "
+            "fails the whole quest."
         )
 
-    @idlerpg.command(name="panel", aliases=["tafel"])
+    @idlerpg.command(name="panel")
     @admin_command
     async def panel(
         self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None
     ) -> None:
-        """Panel mit Buttons posten (Admin)."""
+        """Post the panel with buttons (admin)."""
         channel = channel or ctx.channel
         conf = await self._settings(ctx.guild)
         players = await self._players(ctx.guild)
@@ -1174,33 +1171,33 @@ class IdleRPG(commands.Cog):
         )
         embed.title = "⚔️ IdleRPG"
         embed.description = (
-            "Tritt bei, lehn dich zurück und lass deine Figur leveln.\n"
-            "Jede Nachricht kostet Zeit — Kämpfe entscheiden die Gegenstände."
+            "Join, lean back and let your character level.\n"
+            "Every message costs time — battles decide the items."
         )
         message = await channel.send(embed=embed, view=RealmPanel(self))
         await self.config.guild(ctx.guild).panel.set(
             {"channel": channel.id, "message": message.id}
         )
         if channel != ctx.channel:
-            await ctx.send(f"Panel steht in {channel.mention}.")
+            await ctx.send(f"Panel posted in {channel.mention}.")
 
-    # -- Einstellungen --------------------------------------------------
+    # -- Settings --------------------------------------------------
 
-    @idlerpg.group(
-        name="set", aliases=["settings", "einstellungen"], invoke_without_command=True
-    )
+    @idlerpg.group(name="set", aliases=["settings"], invoke_without_command=True)
     @admin_command
     async def set_(self, ctx: commands.Context) -> None:
-        """Einstellungen dieses Servers (Admin)."""
+        """Settings for this server (admin)."""
         conf = await self._settings(ctx.guild)
         await ctx.send(
-            f"**Tempo** `{conf['speed']:g}` · **Basiszeit** `{fmt_duration(conf['base_time'])}` "
-            f"· **Wachstum** `{conf['growth']:g}` · **Max-Stufe** `{conf['max_level']}`\n"
-            f"**Kämpfe** `{conf['battles']}` · **Schatten** `{conf['npc']}` · "
-            f"**Ereignisse** `{conf['events']}` · **Quests** `{conf['quests']}`\n"
-            f"**Strafe/Zeichen** `{conf['penalty']:g} s` (max {conf['penalty_cap']} Zeichen) · "
-            f"**Ansagen** `{conf['announce']}`\n"
-            f"Mehr mit `{ctx.clean_prefix}irpg set <name> <wert>`."
+            f"**Pace** `{conf['speed']:g}` · "
+            f"**Base time** `{fmt_duration(conf['base_time'])}` "
+            f"· **Growth** `{conf['growth']:g}` · **Max level** `{conf['max_level']}`\n"
+            f"**Battles** `{conf['battles']}` · **Shadow** `{conf['npc']}` · "
+            f"**Events** `{conf['events']}` · **Quests** `{conf['quests']}`\n"
+            f"**Penalty/char** `{conf['penalty']:g}s` "
+            f"(max {conf['penalty_cap']} chars) · "
+            f"**Announcements** `{conf['announce']}`\n"
+            f"More with `{ctx.clean_prefix}irpg set <name> <value>`."
         )
 
     async def _store(self, ctx: commands.Context, key: str, value: Any) -> None:
@@ -1212,149 +1209,149 @@ class IdleRPG(commands.Cog):
     @set_.command(name="toggle", aliases=["on", "off"])
     @admin_command
     async def set_toggle(self, ctx: commands.Context) -> None:
-        """IdleRPG auf diesem Server ein- oder ausschalten."""
+        """Enable or disable IdleRPG on this server."""
         current = await self.config.guild(ctx.guild).enabled()
         await self.config.guild(ctx.guild).enabled.set(not current)
         self._conf.pop(ctx.guild.id, None)
-        state = "an" if not current else "aus"
-        await ctx.send(f"IdleRPG ist jetzt **{state}**.")
+        state = "on" if not current else "off"
+        await ctx.send(f"IdleRPG is now **{state}**.")
         if not current:
             await ctx.send(
-                f"Figuren anlegen mit `{ctx.clean_prefix}irpg register <Name>`."
+                f"Create characters with `{ctx.clean_prefix}irpg register <name>`."
             )
 
-    @set_.command(name="channel", aliases=["kanal"])
+    @set_.command(name="channel")
     @admin_command
     async def set_channel(
         self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None
     ) -> None:
-        """Ansage-Kanal setzen (ohne Angabe: aus)."""
+        """Set the announcement channel (no channel: off)."""
         await self.config.guild(ctx.guild).channel.set(channel.id if channel else None)
         await ctx.send(
-            f"Ansagen gehen jetzt nach {channel.mention}."
+            f"Announcements now go to {channel.mention}."
             if channel
-            else "Ansagen aus."
+            else "Announcements off."
         )
 
-    @set_.command(name="role", aliases=["rolle"])
+    @set_.command(name="role")
     @admin_command
     async def set_role(self, ctx: commands.Context, role: discord.Role = None) -> None:
-        """Rolle für registrierte Figuren (ohne Angabe: keine)."""
+        """Role for registered characters (no role: none)."""
         await self.config.guild(ctx.guild).role.set(role.id if role else None)
         await ctx.send(
-            f"Registrierte bekommen jetzt {role.mention}."
+            f"Registered characters now get {role.mention}."
             if role
-            else "Rollenvergabe aus."
+            else "Role assignment off."
         )
 
-    @set_.command(name="speed", aliases=["tempo"])
+    @set_.command(name="speed")
     @admin_command
-    async def set_speed(self, ctx: commands.Context, faktor: float) -> None:
-        """Geschwindigkeit: 2 = doppelt so schnell, 0.5 = halb so schnell."""
-        if not 0.05 <= faktor <= 100:
-            await ctx.send("Bitte einen Faktor zwischen 0,05 und 100 angeben.")
+    async def set_speed(self, ctx: commands.Context, factor: float) -> None:
+        """Pace: 2 = twice as fast, 0.5 = half as fast."""
+        if not 0.05 <= factor <= 100:
+            await ctx.send("Pick a factor between 0.05 and 100.")
             return
-        await self._store(ctx, "speed", round(faktor, 3))
+        await self._store(ctx, "speed", round(factor, 3))
 
-    @set_.command(name="base", aliases=["basiszeit"])
+    @set_.command(name="base")
     @admin_command
-    async def set_base(self, ctx: commands.Context, sekunden: int) -> None:
-        """Basiszeit für Stufe 1 in Sekunden (Standard 300)."""
-        if not 5 <= sekunden <= 86400:
-            await ctx.send("Bitte 5 bis 86400 Sekunden angeben.")
+    async def set_base(self, ctx: commands.Context, seconds: int) -> None:
+        """Base time for level 1 in seconds (default 300)."""
+        if not 5 <= seconds <= 86400:
+            await ctx.send("Pick between 5 and 86400 seconds.")
             return
-        await self._store(ctx, "base_time", float(sekunden))
+        await self._store(ctx, "base_time", float(seconds))
 
-    @set_.command(name="growth", aliases=["wachstum"])
+    @set_.command(name="growth")
     @admin_command
-    async def set_growth(self, ctx: commands.Context, faktor: float) -> None:
-        """Wachstum pro Stufe (Standard 1,14)."""
-        if not 1.01 <= faktor <= 3.0:
-            await ctx.send("Bitte einen Faktor zwischen 1,01 und 3,0 angeben.")
+    async def set_growth(self, ctx: commands.Context, factor: float) -> None:
+        """Growth per level (default 1.14)."""
+        if not 1.01 <= factor <= 3.0:
+            await ctx.send("Pick a factor between 1.01 and 3.0.")
             return
-        await self._store(ctx, "growth", round(faktor, 4))
+        await self._store(ctx, "growth", round(factor, 4))
 
-    @set_.command(name="maxlevel", aliases=["maxstufe"])
+    @set_.command(name="maxlevel")
     @admin_command
-    async def set_maxlevel(self, ctx: commands.Context, stufe: int) -> None:
-        """Höchste erreichbare Stufe."""
-        if not 2 <= stufe <= 1000:
-            await ctx.send("Bitte 2 bis 1000 angeben.")
+    async def set_maxlevel(self, ctx: commands.Context, level_value: int) -> None:
+        """Highest reachable level."""
+        if not 2 <= level_value <= 1000:
+            await ctx.send("Pick between 2 and 1000.")
             return
-        await self._store(ctx, "max_level", stufe)
+        await self._store(ctx, "max_level", level_value)
 
-    @set_.command(name="battles", aliases=["kaempfe"])
+    @set_.command(name="battles")
     @admin_command
     async def set_battles(self, ctx: commands.Context) -> None:
-        """Kämpfe ein- oder ausschalten."""
+        """Enable or disable battles."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "battles", not conf.get("battles", True))
 
-    @set_.command(name="npc", aliases=["schatten"])
+    @set_.command(name="npc")
     @admin_command
     async def set_npc(self, ctx: commands.Context) -> None:
-        """Kämpfe gegen den Schatten des Reiches (wenn niemand sonst da ist)."""
+        """Fight the Shadow of the Realm when nobody else is around."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "npc", not conf.get("npc", True))
 
-    @set_.command(name="events", aliases=["ereignisse"])
+    @set_.command(name="events")
     @admin_command
     async def set_events(self, ctx: commands.Context) -> None:
-        """Schicksalsereignisse (Hand Gottes, Geschenke, Unheil) ein-/ausschalten."""
+        """Fate events (Hand of God, godsends, calamities) on or off."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "events", not conf.get("events", True))
 
-    @set_.command(name="quests", aliases=["abenteuer"])
+    @set_.command(name="quests")
     @admin_command
     async def set_quests(self, ctx: commands.Context) -> None:
-        """Quests ein- oder ausschalten."""
+        """Quests on or off."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "quests", not conf.get("quests", True))
 
-    @set_.command(name="uniques", aliases=["einzigartig"])
+    @set_.command(name="uniques")
     @admin_command
     async def set_uniques(self, ctx: commands.Context) -> None:
-        """Einzigartige Gegenstände ein- oder ausschalten."""
+        """Unique items on or off."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "uniques", not conf.get("uniques", True))
 
-    @set_.command(name="penalty", aliases=["strafe"])
+    @set_.command(name="penalty")
     @admin_command
-    async def set_penalty(self, ctx: commands.Context, sekunden: float) -> None:
-        """Strafsekunden pro Nachrichten-Zeichen (0 = Reden kostet nichts)."""
-        if not 0 <= sekunden <= 60:
-            await ctx.send("Bitte 0 bis 60 Sekunden angeben.")
+    async def set_penalty(self, ctx: commands.Context, seconds: float) -> None:
+        """Penalty seconds per message character (0 = talking is free)."""
+        if not 0 <= seconds <= 60:
+            await ctx.send("Pick between 0 and 60 seconds.")
             return
-        await self._store(ctx, "penalty", round(sekunden, 3))
+        await self._store(ctx, "penalty", round(seconds, 3))
 
-    @set_.command(name="penaltycap", aliases=["strafenlimit"])
+    @set_.command(name="penaltycap")
     @admin_command
-    async def set_penaltycap(self, ctx: commands.Context, zeichen: int) -> None:
-        """So viele Zeichen einer Nachricht werden höchstens gezählt."""
-        if not 0 <= zeichen <= 2000:
-            await ctx.send("Bitte 0 bis 2000 Zeichen angeben.")
+    async def set_penaltycap(self, ctx: commands.Context, chars: int) -> None:
+        """How many characters of a message are counted at most."""
+        if not 0 <= chars <= 2000:
+            await ctx.send("Pick between 0 and 2000 characters.")
             return
-        await self._store(ctx, "penalty_cap", zeichen)
+        await self._store(ctx, "penalty_cap", chars)
 
-    @set_.command(name="announce", aliases=["ansagen"])
+    @set_.command(name="announce")
     @admin_command
     async def set_announce(self, ctx: commands.Context) -> None:
-        """Ansagen im Kanal ein- oder ausschalten."""
+        """Announcements in the channel on or off."""
         conf = await self._settings(ctx.guild)
         await self._store(ctx, "announce", not conf.get("announce", True))
 
     @set_.command(name="reset")
     @admin_command
     async def set_reset(self, ctx: commands.Context) -> None:
-        """Alles auf Standard zurücksetzen und alle Figuren löschen."""
+        """Reset everything to defaults and delete all characters."""
         view = ConfirmView(ctx.author, disable_buttons=True)
         view.message = await ctx.send(
-            "Das löscht **alle Figuren** und setzt jede Einstellung zurück. Sicher?",
+            "This deletes **all characters** and resets every setting. Are you sure?",
             view=view,
         )
         await view.wait()
         if not view.result:
-            await ctx.send("Nichts passiert.")
+            await ctx.send("Nothing changed.")
             return
         await self.config.guild(ctx.guild).clear()
         self.players.pop(ctx.guild.id, None)
@@ -1362,14 +1359,14 @@ class IdleRPG(commands.Cog):
         self._quest_loaded.discard(ctx.guild.id)
         self._conf.pop(ctx.guild.id, None)
         self._dirty.discard(ctx.guild.id)
-        await ctx.send("Das Reich ist zurückgesetzt.")
+        await ctx.send("The realm has been reset.")
 
-    # -- Verwaltung -----------------------------------------------------
+    # -- Administration -----------------------------------------------------
 
-    @idlerpg.group(name="admin", aliases=["verwalten"], invoke_without_command=True)
+    @idlerpg.group(name="admin", aliases=["manage"], invoke_without_command=True)
     @admin_command
     async def admin(self, ctx: commands.Context) -> None:
-        """Figuren verwalten (Admin)."""
+        """Manage characters (admin)."""
         await ctx.send_help(ctx.command)
 
     async def _target(
@@ -1378,16 +1375,16 @@ class IdleRPG(commands.Cog):
         players = await self._players(ctx.guild)
         player = players.get(member.id)
         if player is None:
-            await ctx.send(f"{member.display_name} hat keine Figur.")
+            await ctx.send(f"{member.display_name} has no character.")
             return None
         return player
 
-    @admin.command(name="hog", aliases=["handgottes"])
+    @admin.command(name="hog", aliases=["handofgod"])
     @admin_command
     async def admin_hog(
         self, ctx: commands.Context, member: Optional[discord.Member] = None
     ) -> None:
-        """Hand Gottes beschwören — für eine Figur oder das ganze Reich."""
+        """Summon the Hand of God — for one character or the whole realm."""
         conf = await self._settings(ctx.guild)
         players = await self._players(ctx.guild)
         targets = (
@@ -1395,7 +1392,7 @@ class IdleRPG(commands.Cog):
         )
         targets = [player for player in targets if player is not None]
         if not targets:
-            await ctx.send("Keine Figuren im Reich.")
+            await ctx.send("No characters in the realm.")
             return
 
         lines = []
@@ -1403,53 +1400,53 @@ class IdleRPG(commands.Cog):
             shift = self._rng.uniform(0.05, 0.75)
             if self._rng.random() < 0.8:
                 player.ttl -= player.next_time(conf) * shift
-                lines.append(f"✨ **{player.name}** {shift * 100:.0f} % schneller")
+                lines.append(f"✨ **{player.name}** {shift * 100:.0f}% faster")
             else:
                 player.ttl += player.next_time(conf) * shift
-                lines.append(f"⚡ **{player.name}** {shift * 100:.0f} % langsamer")
+                lines.append(f"⚡ **{player.name}** {shift * 100:.0f}% slower")
         self._dirty.add(ctx.guild.id)
-        await ctx.send("Die Hand Gottes fährt herab:\n" + "\n".join(lines[:15]))
+        await ctx.send("The Hand of God descends:\n" + "\n".join(lines[:15]))
 
     @admin.command(name="level")
     @admin_command
     async def admin_level(
-        self, ctx: commands.Context, member: discord.Member, stufe: int
+        self, ctx: commands.Context, member: discord.Member, level_value: int
     ) -> None:
-        """Figur auf eine Stufe setzen."""
-        if not 1 <= stufe <= 1000:
-            await ctx.send("Bitte 1 bis 1000 angeben.")
+        """Set a character's level."""
+        if not 1 <= level_value <= 1000:
+            await ctx.send("Pick between 1 and 1000.")
             return
         player = await self._target(ctx, member)
         if player is None:
             return
         conf = await self._settings(ctx.guild)
-        player.level = stufe
-        player.ttl = next_level_time(stufe, conf)
+        player.level = level_value
+        player.ttl = next_level_time(level_value, conf)
         self._dirty.add(ctx.guild.id)
         await self._save(ctx.guild.id)
-        await ctx.send(f"**{player.name}** ist jetzt Stufe **{stufe}**.")
+        await ctx.send(f"**{player.name}** is now level **{level_value}**.")
 
     @admin.command(name="ttl")
     @admin_command
     async def admin_ttl(
-        self, ctx: commands.Context, member: discord.Member, sekunden: int
+        self, ctx: commands.Context, member: discord.Member, seconds: int
     ) -> None:
-        """Restzeit bis zur nächsten Stufe verändern (negativ = schneller)."""
+        """Change the time to the next level (negative = faster)."""
         player = await self._target(ctx, member)
         if player is None:
             return
-        player.ttl = max(0.0, player.ttl + sekunden)
+        player.ttl = max(0.0, player.ttl + seconds)
         self._dirty.add(ctx.guild.id)
         await self._save(ctx.guild.id)
         await ctx.send(
-            f"**{player.name}** braucht noch {fmt_duration(player.ttl)} bis Stufe "
-            f"{player.level + 1}."
+            f"**{player.name}** needs {fmt_duration(player.ttl)} more to reach "
+            f"level {player.level + 1}."
         )
 
-    @admin.command(name="remove", aliases=["entfernen"])
+    @admin.command(name="remove", aliases=["delete"])
     @admin_command
     async def admin_remove(self, ctx: commands.Context, member: discord.Member) -> None:
-        """Figur eines Mitglieds löschen."""
+        """Delete a member's character."""
         player = await self._target(ctx, member)
         if player is None:
             return
@@ -1457,27 +1454,27 @@ class IdleRPG(commands.Cog):
         players.pop(member.id, None)
         self._dirty.add(ctx.guild.id)
         await self._save(ctx.guild.id)
-        await ctx.send(f"**{player.name}** wurde aus dem Reich entfernt.")
+        await ctx.send(f"**{player.name}** was removed from the realm.")
 
 
 # ----------------------------------------------------------------------
-# Persistente Views
+# Persistent views
 # ----------------------------------------------------------------------
 
 
-class JoinModal(discord.ui.Modal, title="Dem Reich beitreten"):
+class JoinModal(discord.ui.Modal, title="Join the realm"):
     name_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Name der Figur",
-        placeholder="z. B. Grimmwald",
+        label="Character name",
+        placeholder="e.g. Grimmwald",
         min_length=3,
         max_length=24,
     )
     class_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Klasse (frei wählbar)",
-        placeholder="z. B. Barde",
+        label="Class (free choice)",
+        placeholder="e.g. Bard",
         required=False,
         max_length=30,
-        default="Abenteurer",
+        default="Adventurer",
     )
 
     def __init__(self, cog: IdleRPG) -> None:
@@ -1491,7 +1488,7 @@ class JoinModal(discord.ui.Modal, title="Dem Reich beitreten"):
 
 
 class RealmPanel(discord.ui.View):
-    """Persistentes Panel: Beitreten, Charakter, Rangliste, Reich."""
+    """Persistent panel: join, character, leaderboard, realm."""
 
     def __init__(self, cog: IdleRPG) -> None:
         super().__init__(timeout=None)
@@ -1502,7 +1499,7 @@ class RealmPanel(discord.ui.View):
         return players.get(interaction.user.id)
 
     @discord.ui.button(
-        label="Beitreten",
+        label="Join",
         emoji="⚔️",
         style=discord.ButtonStyle.success,
         custom_id="idlerpg:join",
@@ -1514,7 +1511,7 @@ class RealmPanel(discord.ui.View):
         await interaction.response.send_modal(JoinModal(self.cog))
 
     @discord.ui.button(
-        label="Charakter",
+        label="Character",
         emoji="🧙",
         style=discord.ButtonStyle.primary,
         custom_id="idlerpg:char",
@@ -1526,7 +1523,7 @@ class RealmPanel(discord.ui.View):
         player = await self._player(interaction)
         if player is None:
             await interaction.response.send_message(
-                "Du hast noch keine Figur — nimm **Beitreten**.", ephemeral=True
+                "You don't have a character yet — press **Join**.", ephemeral=True
             )
             return
         conf = await self.cog._settings(interaction.guild)
@@ -1535,7 +1532,7 @@ class RealmPanel(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Rangliste",
+        label="Leaderboard",
         emoji="🏆",
         style=discord.ButtonStyle.secondary,
         custom_id="idlerpg:top",
@@ -1552,7 +1549,7 @@ class RealmPanel(discord.ui.View):
         )
 
     @discord.ui.button(
-        label="Reich",
+        label="Realm",
         emoji="🗺️",
         style=discord.ButtonStyle.secondary,
         custom_id="idlerpg:realm",
@@ -1576,7 +1573,7 @@ class RealmPanel(discord.ui.View):
 
 
 class RankView(discord.ui.View):
-    """Blättern durch die Rangliste — nur für den Aufrufer."""
+    """Page through the leaderboard — only for the caller."""
 
     def __init__(
         self, author_id: int, pages: List[discord.Embed], index: int = 0
@@ -1595,7 +1592,7 @@ class RankView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "Das ist nicht deine Rangliste.", ephemeral=True
+                "This is not your leaderboard.", ephemeral=True
             )
             return False
         return True
