@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg
 ```
 
 Or install one at a time:
@@ -19,6 +19,7 @@ Or install one at a time:
 [p]cog install freak-cogs namint
 [p]cog install freak-cogs micwatch
 [p]cog install freak-cogs osint
+[p]cog install freak-cogs idlerpg
 ```
 
 ## Cogs
@@ -266,12 +267,71 @@ Notes:
 - Answers are cached for 30 minutes per target; `[p]osint set clearcache` drops that cache. Lookups can be limited to specific channels and throttled per member, and an audit channel can log every lookup.
 - Sources and their limits are listed in-game by `[p]osint sources`; the EXIF command's own caveat is that Discord re-encodes uploaded images and drops their metadata, so use a URL to the original file for a photo.
 
+### idlerpg
+
+The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Discord cog. Register a character and it levels purely by idling: every level-up finds an item, and the level-up may start a battle against anyone else present. No IRC server, no password — the Discord account *is* the login, and **every guild is its own realm** with its own settings.
+
+User-facing text is **German** (the home server is German); command and setting names stay English.
+
+```
+[p]irpg set toggle            # turn this server's realm on
+[p]irpg panel #games          # post the button panel
+[p]irpg register Grimmwald Barde
+```
+
+The panel carries four buttons — **Beitreten** (a modal asking for name and class), **Charakter**, **Rangliste**, **Reich** — and answers ephemerally. It keeps working after a restart.
+
+| Command | What it does |
+| --- | --- |
+| `[p]irpg register <name> [class]` | Create a character (name unique per server, 3–24 chars; class free-form, ≤ 30) |
+| `[p]irpg rename <name>` | Rename your character |
+| `[p]irpg unregister` | Delete your character (asks first) |
+| `[p]irpg align <gut\|neutral\|böse>` | Alignment: good +10 % item sum but rare crits, evil −10 % but crits at 1/20 |
+| `[p]irpg char` | Character sheet: level, progress bar, all ten item slots, record |
+| `[p]irpg top [page]` | Leaderboard, paginated |
+| `[p]irpg realm` | Realm overview: figures, present players, top three, running quest |
+| `[p]irpg quest` | Active quest, its members and remaining time |
+| `[p]irpg panel [#channel]` | Post the panel (Manage Server) |
+| `[p]irpg set …` | Every rule, per server (Manage Server) — see below |
+| `[p]irpg admin hog\|level\|ttl\|remove` | Summon the Hand of God, set a level, shift time, delete a character |
+
+Settings (`[p]irpg set <key> <value>`):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `toggle` | off | Enable the realm |
+| `channel [#channel]` | none | Where announcements go (falls back to the system channel) |
+| `role [@role]` | none | Role handed to registered players |
+| `speed <factor>` | `1` | Global pace: `2` = twice as fast, `0.5` = half |
+| `base <seconds>` | `300` | Base time for level 1 |
+| `growth <factor>` | `1.14` | Growth per level |
+| `maxlevel <n>` | `120` | Highest reachable level |
+| `battles` / `npc` | on / on | Duels on level-up; fights against the realm's shadow when alone |
+| `events` | on | Hand of God (1/20 per day), godsends and calamities (1/8 each), team battles |
+| `quests` | on | Automatic quests for idle players |
+| `uniques` | on | The eight unique items (1/40 per eligible level-up) |
+| `penalty <seconds>` | `1` | Time cost per message character, `0` = talking is free |
+| `penaltycap <chars>` | `60` | Characters of a message counted at most |
+| `announce` | on | Announce level-ups, fights, quests and fate in the channel |
+| `reset` | — | Wipe all figures and settings (asks first) |
+
+Notes:
+
+- **Levelling** follows the IRPG formula `base * growth ^ level`, linear after level 50 (`cap_extra`, one day per level by default). Ten item slots, item rolls weighted `1 / 1.4 ^ n` up to `1.5 × level`, battles compare the sum of item levels.
+- **Talking costs time**, exactly like the original: a message adds `penalty × characters × 1.14 ^ level` seconds to your next level. Command invocations are free, so using the cog never hurts you. `[p]irpg set penalty 0` disables the whole mechanic for a chatty server.
+- **Only presence counts.** Time accrues while the member is in the guild; leaving pauses the clock and keeps the character. `penalty_leave` (default off) can add a penalty for leaving.
+- **Quests** start on their own once enough figures have the required level and idle time. A quest fails as soon as one participant is penalised (a message is enough), and then every present player pays the realm penalty. Succeed and the questers each drop 25 % of their remaining time.
+- **Battles** only happen on a level-up: below level 25 with a configurable chance, from 25 on always. Wins cost the loser nothing unless a critical strike lands (1/50 good, 1/35 neutral, 1/20 evil); a win can also steal one better item.
+- Data is written every 60 seconds and on unload, not on every tick, so a busy server does not hammer the config. `[p]mydata` returns your character as a file, `[p]mydata forgetme` deletes it.
+- **No requirements** — only what Red already ships.
+
 ## Extra setup
 
 - **vcstatus** — the bot needs the **Set Voice Channel Status** permission, plus **Manage Channels** while it is not connected to that channel.
 - **kickalerts** — needs OAuth2 app credentials from https://kick.com/settings/developer. Store them with `[p]kickalert setcreds <client_id> <client_secret>` (or `[p]set api kick client_id,<id> client_secret,<secret>`) and verify with `[p]kickalert authstatus`. The bot needs **View Channel**, **Send Messages** and **Embed Links** in the alert channel.
 - **voicesay** — needs **ffmpeg** and **ffprobe** on the host to convert audio that is not already OGG Opus.
 - **micwatch** — needs the **Move Members** permission (plus **Connect** for `speak` mode). `speak` mode additionally needs voice support in the bot venv: `pip install -U "Red-DiscordBot[voice]"` (or `[p]pipinstall pynacl davey`), then `[p]reload micwatch`. `pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session discord.py 2.6+ negotiates.
+- **idlerpg** — nothing to install. The bot needs **Send Messages** and **Embed Links** in the announcement channel; `[p]irpg set role` additionally needs **Manage Roles**, with the bot's role above the one it hands out.
 - **naminter** — nothing to configure, but `[p]cog install` pulls the `naminter` package (curl-cffi, orjson, jsonschema plus the upstream CLI extras: rich, uvloop, weasyprint), so the install step takes noticeably longer than the other cogs. Python 3.11 or newer is required, and the host needs outbound HTTPS to `raw.githubusercontent.com` and to the sites being checked.
 
 ## Requirements

@@ -1,0 +1,28 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Danke fürs Installieren von IdleRPG!\n\nStart: `[p]irpg set toggle` schaltet das Reich auf diesem Server ein, `[p]irpg panel #kanal` postet die Tafel mit Buttons (Beitreten, Charakter, Rangliste, Reich).\n\nSpiel: `[p]irpg register <Name> [Klasse]` legt die Figur an — danach levelt sie allein durchs Herumsitzen, findet bei jedem Aufstieg einen Gegenstand und kämpft gegen andere Anwesende. Jede Nachricht kostet Zeit, genau wie im IRC-Original.\n\nRegeln: alles pro Server einstellbar — Tempo (`set speed`), Basiszeit, Wachstum, Max-Stufe, Kämpfe, Schatten-Kämpfe, Schicksalsereignisse, Quests, Strafen pro Zeichen und der Ansage-Kanal.\n\nDaten: pro Server wird eine Figur je Mitglied gespeichert (Name, Klasse, Gesinnung, Stufe, Restzeit, Ausrüstung, Zähler). `[p]mydata` gibt sie heraus, `[p]mydata forgetme` löscht sie.\n\nAbhängigkeiten: keine — es wird nur genutzt, was Red mitbringt.",
+    "name": "IdleRPG",
+    "short": "Idle-Rollenspiel: Figur registrieren, idlen, leveln, kämpfen.",
+    "description": "Der IRC-Klassiker idlerpg.net als Discord-Cog: Wer eine Figur registriert, levelt allein durchs Herumsitzen, findet bei jedem Aufstieg einen Gegenstand (zehn Slots, gewichtete Würfe, einzigartige Funde) und kämpft gegen andere Anwesende — mit Krit, Item-Diebstahl und einem Schatten des Reiches als Ersatzgegner. Dazu Schicksalsereignisse (Hand Gottes, Geschenke, Unheil, Teamkämpfe), Quests, die scheitern, sobald ein Beteiligter redet, Gesinnungen mit Boni und Mali, Strafsekunden für Nachrichten und ein persistentes Panel mit Beitritts-Formular, Charakterbogen, Rangliste und Reichsübersicht. Jedes Server-Reich ist eine eigene Welt mit eigener Konfiguration; alles läuft in Discord, ohne IRC-Server.",
+    "end_user_data_statement": "This cog stores per-guild game data for each member who registers a character: the chosen character name, class, alignment, level, remaining time to the next level, equipped items, counters (wins, losses, critical hits, steals, penalties, idle time) and timestamps. Data is stored via Red's Config and is only used to run the game on that server. It can be retrieved with `[p]mydata` and deleted with `[p]mydata forgetme`; deleting a character with `[p]irpg unregister` removes it as well.",
+    "requirements": [],
+    "tags": [
+        "idlerpg",
+        "idle",
+        "rpg",
+        "game",
+        "leveling",
+        "fun"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
