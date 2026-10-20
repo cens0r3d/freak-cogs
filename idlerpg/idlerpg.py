@@ -120,7 +120,7 @@ def admin_command(func):
 class IdleRPG(commands.Cog):
     """Idle-Rollenspiel: Figur registrieren, idlen, leveln, kämpfen."""
 
-    __version__ = "1.0.1"
+    __version__ = "1.0.2"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -705,10 +705,30 @@ class IdleRPG(commands.Cog):
     # Darstellung
     # ------------------------------------------------------------------
 
-    def _colour(self, ctx: Optional[commands.Context] = None) -> discord.Colour:
-        if ctx is not None and getattr(ctx, "embed_color", None):
-            return ctx.embed_color
-        return discord.Colour(PANEL_COLOR)
+    async def _colour(self, ctx: Optional[commands.Context] = None) -> discord.Colour:
+        """Red's ``ctx.embed_color`` ist eine Property, die eine Coroutine liefert.
+
+        ``await ctx.embed_color()`` ist der einzig gültige Aufruf: ein direktes
+        Weiterreichen der Property schiebt die Methode als Farbe in den Embed und
+        discord.py wirft ``TypeError: Expected discord.Colour … but received
+        method``.  Fehlt der Kontext (Panel-Views), gilt die Hausfarbe.
+        """
+        fallback = discord.Colour(PANEL_COLOR)
+        if ctx is None:
+            return fallback
+        try:
+            getter = getattr(ctx, "embed_color", None)
+        except Exception:
+            return fallback
+        if getter is None:
+            return fallback
+        try:
+            colour = getter() if callable(getter) else getter
+            if asyncio.iscoroutine(colour):
+                colour = await colour
+        except Exception:
+            return fallback
+        return colour if isinstance(colour, discord.Colour) else fallback
 
     def _char_embed(
         self,
@@ -951,7 +971,7 @@ class IdleRPG(commands.Cog):
         conf = await self._settings(ctx.guild)
         await ctx.send(
             content=f"⚔️ **{player.name}** betritt das Reich.",
-            embed=self._char_embed(player, conf, self._colour(ctx)),
+            embed=self._char_embed(player, conf, await self._colour(ctx)),
         )
 
     @idlerpg.command(name="rename", aliases=["umbenennen"])
@@ -1059,7 +1079,7 @@ class IdleRPG(commands.Cog):
             )
             return
         conf = await self._settings(ctx.guild)
-        await ctx.send(embed=self._char_embed(player, conf, self._colour(ctx)))
+        await ctx.send(embed=self._char_embed(player, conf, await self._colour(ctx)))
 
     @idlerpg.command(name="top", aliases=["rangliste", "leaderboard", "rang"])
     @commands.guild_only()
@@ -1086,7 +1106,9 @@ class IdleRPG(commands.Cog):
             self._quest_loaded.add(ctx.guild.id)
         quest = self.quests.get(ctx.guild.id) or {}
         await ctx.send(
-            embed=self._realm_embed(ctx.guild, players, conf, quest, self._colour(ctx))
+            embed=self._realm_embed(
+                ctx.guild, players, conf, quest, await self._colour(ctx)
+            )
         )
 
     @idlerpg.command(name="quest", aliases=["abenteuer"])
@@ -1148,7 +1170,7 @@ class IdleRPG(commands.Cog):
             players,
             conf,
             self.quests.get(ctx.guild.id) or {},
-            self._colour(ctx),
+            await self._colour(ctx),
         )
         embed.title = "⚔️ IdleRPG"
         embed.description = (
