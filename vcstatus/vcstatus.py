@@ -62,8 +62,13 @@ class VCStatus(commands.Cog):
             channel_empty={},
         )
 
-    async def cog_unload(self) -> None:
-        """Cancel queued updates so nothing fires after an unload."""
+    def cog_unload(self) -> None:
+        """Cancel queued updates so nothing fires after an unload.
+
+        ``cog_unload`` is called synchronously by discord.py, so this must not
+        be a coroutine — as ``async def`` it would never run and the debounce
+        tasks would outlive the cog.
+        """
         for task in self._pending.values():
             task.cancel()
         self._pending.clear()
@@ -263,7 +268,7 @@ class VCStatus(commands.Cog):
             await self.config.guild(ctx.guild).channels.set({})
             await self.config.guild(ctx.guild).channel_empty.set({})
             self._status_cache.clear()
-            await ctx.send("All reset and auto-status disabled.")
+            await ctx.send("All status settings reset to defaults.")
 
     @vcstatus.command(name="show")
     async def show(self, ctx: commands.Context) -> None:

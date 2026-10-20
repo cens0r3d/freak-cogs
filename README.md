@@ -54,6 +54,7 @@ Notes:
 - `[p]vcstatus empty` decides what an empty channel shows: a cleared status, or the message with a count of 0. It works server-wide or per channel — `[p]vcstatus empty #lounge` toggles that channel's own setting, `[p]vcstatus empty #lounge reset` makes it follow the server default again. A per-channel setting always wins.
 - Updates are debounced (~2 s), so a burst of joins/leaves becomes one request per channel — the status route is rate limited.
 - If a status ever looks stale, `[p]vcstatus resync` re-pushes everything without touching your config.
+- Full manual: [`vcstatus/README.md`](vcstatus/README.md).
 
 ### kickalerts
 
