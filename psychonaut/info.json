@@ -1,0 +1,33 @@
+{
+    "name": "PsychonautWiki",
+    "author": [
+        "cens0r3d"
+    ],
+    "description": "Psychoactive substance reference from PsychonautWiki: chemical and psychoactive class, routes of administration with dose ranges, the full duration breakdown, bioavailability, tolerance, addiction and toxicity notes, dangerous/unsafe/uncertain interactions and the documented subjective effects. Data comes from the PsychonautWiki GraphQL API and its MediaWiki API, cached in memory and on disk, browsable by name, alias, class and a random pick.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not store any End User Data.",
+    "hidden": false,
+    "install_msg": "Thanks for installing PsychonautWiki! Use `[p]psychonaut` for the command overview. No configuration and no API key needed: the cog pulls the substance index on first use and keeps a local copy for outages. Harm reduction reference only, not medical advice.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        8,
+        0
+    ],
+    "permissions": [
+        "embed_links",
+        "attach_files"
+    ],
+    "required_cogs": {},
+    "requirements": [],
+    "short": "PsychonautWiki dosages, effects and interactions",
+    "tags": [
+        "psychonautwiki",
+        "substances",
+        "harm reduction",
+        "dosage",
+        "lookup",
+        "info"
+    ],
+    "type": "COG"
+}
