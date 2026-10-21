@@ -79,6 +79,7 @@ DEFAULT_GUILD: Dict[str, Any] = {
     "show_viewer_count": True,
     "show_category": True,
     "auto_delete": False,
+    "offline_post": "new",
     "timezone_offset": 1,
     "enabled": True,
     "edit_live_alerts": True,
@@ -99,6 +100,10 @@ STREAMER_DEFAULTS: Dict[str, Any] = {
     "last_edit": None,
     "last_title": None,
     "last_category": None,
+    "viewer_samples": 0,
+    "viewer_total": 0,
+    "peak_viewers": 0,
+    "last_viewers": 0,
 }
 
 SLUG_RE = re.compile(r"^[a-z0-9_-]{1,25}$")
@@ -199,6 +204,92 @@ class StreamInfo:
             info.thumbnail = None
             info.tags = ()
         return info
+
+
+@dataclass(slots=True)
+class StreamSummary:
+    """What one broadcast looked like, for the end-of-stream message."""
+
+    slug: str
+    url: str
+    title: Optional[str] = None
+    category: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration: Optional[timedelta] = None
+    peak_viewers: Optional[int] = None
+    average_viewers: Optional[int] = None
+    samples: int = 0
+
+
+def summarise_stream(
+    info: StreamInfo,
+    state: Mapping[str, Any],
+    *,
+    ended_at: Optional[datetime] = None,
+) -> StreamSummary:
+    """Turn the stored state of a finished stream into its statistics.
+
+    ``viewer_samples``/``viewer_total`` are accumulated by :func:`accumulate_viewers`
+    on every poll, so the average is the mean of the polled viewer counts.
+    """
+    started = parse_kick_time(state.get("started_at"))
+    ended = ended_at or datetime.now(timezone.utc)
+    samples = _as_int(state.get("viewer_samples")) or 0
+    total = _as_int(state.get("viewer_total")) or 0
+    peak = _as_int(state.get("peak_viewers"))
+    return StreamSummary(
+        slug=info.slug,
+        url=info.url,
+        title=_as_text(state.get("last_title")) or info.title,
+        category=_as_text(state.get("last_category")) or info.category,
+        started_at=started,
+        ended_at=ended,
+        duration=(ended - started) if started else None,
+        peak_viewers=peak if samples and peak is not None else None,
+        average_viewers=round(total / samples) if samples else None,
+        samples=samples,
+    )
+
+
+def accumulate_viewers(state: Mapping[str, Any], viewers: Any) -> Dict[str, int]:
+    """Add one viewer sample to the running statistics of a stream."""
+    samples = _as_int(state.get("viewer_samples")) or 0
+    total = _as_int(state.get("viewer_total")) or 0
+    peak = _as_int(state.get("peak_viewers")) or 0
+    count = max(0, _as_int(viewers) or 0)
+    return {
+        "viewer_samples": samples + 1,
+        "viewer_total": total + count,
+        "peak_viewers": max(peak, count),
+        "last_viewers": count,
+    }
+
+
+def _summary_pairs(summary: StreamSummary) -> List[Tuple[str, str]]:
+    """The statistics shown in an end-of-stream embed, as name/value pairs."""
+    pairs: List[Tuple[str, str]] = []
+    formatted = format_uptime(summary.duration)
+    if formatted:
+        pairs.append(("Stream time", formatted))
+    if summary.peak_viewers is not None:
+        pairs.append(("Peak viewers", f"{summary.peak_viewers:,}"))
+    if summary.average_viewers is not None:
+        pairs.append(("Average viewers", f"{summary.average_viewers:,}"))
+    started = _stamp(summary.started_at, "t")
+    if started:
+        pairs.append(("Started", started))
+    ended = _stamp(summary.ended_at, "t")
+    if ended:
+        pairs.append(("Ended", ended))
+    return pairs
+
+
+def _summary_footer(label: str, summary: StreamSummary) -> str:
+    """Footer text, stating how many viewer samples the numbers are based on."""
+    if summary.samples:
+        return f"Kick.com | {label} · {summary.samples} checks"
+    return f"Kick.com | {label}"
 
 
 def _as_text(value: Any) -> Optional[str]:
@@ -648,13 +739,15 @@ def build_live_embed(info: StreamInfo, settings: EmbedSettings) -> discord.Embed
 
 
 def build_offline_embed(
-    info: StreamInfo, settings: EmbedSettings, duration: Optional[timedelta] = None
+    info: StreamInfo,
+    settings: EmbedSettings,
+    summary: Optional[StreamSummary] = None,
 ) -> discord.Embed:
     """The "stream ended" embed that replaces the live alert."""
+    summary = summary or summarise_stream(info, {})
     lines = [f"**{info.slug}** is offline."]
-    formatted = format_uptime(duration)
-    if formatted:
-        lines.append(f"Was live for {formatted}.")
+    if summary.title:
+        lines.append(f"> {summary.title}")
     lines.append(f"[Visit channel]({info.url})")
     embed = discord.Embed(
         colour=discord.Colour(OFFLINE_COLOR),
@@ -662,9 +755,37 @@ def build_offline_embed(
         timestamp=datetime.now(settings.tz),
     )
     embed.set_author(name=f"{info.slug} is offline", url=info.url)
+    for name, value in _summary_pairs(summary):
+        embed.add_field(name=name, value=value, inline=True)
     if info.banner:
         embed.set_thumbnail(url=info.banner)
-    embed.set_footer(text="Kick.com | Stream ended")
+    embed.set_footer(text=_summary_footer("Stream ended", summary))
+    return embed
+
+
+def build_summary_embed(
+    info: StreamInfo, settings: EmbedSettings, summary: StreamSummary
+) -> discord.Embed:
+    """A fresh post for the end of a stream, with the stream's statistics."""
+    embed = discord.Embed(
+        colour=discord.Colour(OFFLINE_COLOR),
+        title=f"{summary.slug} — stream ended",
+        url=info.url,
+        timestamp=datetime.now(settings.tz),
+    )
+    embed.set_author(name=f"{summary.slug} is offline", url=info.url)
+    lines: List[str] = []
+    if summary.title:
+        lines.append(f"**{summary.title}**")
+    if summary.category:
+        lines.append(f"**Category:** {summary.category}")
+    lines.append(f"[Visit channel]({info.url})")
+    embed.description = "\n".join(lines)
+    for name, value in _summary_pairs(summary):
+        embed.add_field(name=name, value=value, inline=True)
+    if info.banner:
+        embed.set_thumbnail(url=info.banner)
+    embed.set_footer(text=_summary_footer("Stream summary", summary))
     return embed
 
 
@@ -753,7 +874,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.1.0"
+    __version__ = "3.2.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -906,6 +1027,9 @@ class KickAlerts(commands.Cog):
         settings = EmbedSettings.from_guild_config(data)
         auto_delete = bool(data.get("auto_delete", False))
         edit_live = bool(data.get("edit_live_alerts", True))
+        offline_post = str(data.get("offline_post") or "new").lower()
+        if offline_post not in ("new", "edit"):
+            offline_post = "new"
         update_seconds = _clamp_update_seconds(data.get("live_update_seconds"))
         global_channel = data.get("global_channel_id")
         global_role = data.get("global_ping_role_id")
@@ -925,6 +1049,7 @@ class KickAlerts(commands.Cog):
                 settings,
                 auto_delete=auto_delete,
                 edit_live=edit_live,
+                offline_post=offline_post,
                 update_seconds=update_seconds,
                 global_channel=global_channel,
                 global_role=global_role,
@@ -943,6 +1068,7 @@ class KickAlerts(commands.Cog):
         *,
         auto_delete: bool,
         edit_live: bool,
+        offline_post: str,
         update_seconds: int,
         global_channel: Optional[int],
         global_role: Optional[int],
@@ -966,29 +1092,48 @@ class KickAlerts(commands.Cog):
             return "muted"
 
         if info.is_live and (not was_live or info.stream_key != previous_key):
+            # A new broadcast: the viewer statistics start from zero.
+            stats = accumulate_viewers({}, info.viewers)
             delivered = await self._announce(
-                guild, slug, info, settings, channel, state, global_role
+                guild, slug, info, settings, channel, state, global_role, stats=stats
             )
             return "announced" if delivered else "no-permission"
 
         if not info.is_live and was_live:
             await self._end_alert(
-                guild, slug, info, settings, channel, state, auto_delete=auto_delete
+                guild,
+                slug,
+                info,
+                settings,
+                channel,
+                state,
+                auto_delete=auto_delete,
+                offline_post=offline_post,
             )
             return "ended"
 
         if info.is_live:
+            stats = accumulate_viewers(state, info.viewers)
             if edit_live and self._needs_refresh(state, info, update_seconds):
                 edited = await self._refresh_alert(
-                    guild, slug, info, settings, channel, state
+                    guild, slug, info, settings, channel, state, stats=stats
                 )
                 return "updated" if edited else "unchanged"
             await self._store_state(
-                guild, slug, is_live=True, stream_key=info.stream_key
+                guild, slug, is_live=True, stream_key=info.stream_key, **stats
             )
             return "unchanged"
 
-        await self._store_state(guild, slug, is_live=False, stream_key=None)
+        await self._store_state(
+            guild,
+            slug,
+            is_live=False,
+            stream_key=None,
+            viewer_samples=0,
+            viewer_total=0,
+            peak_viewers=0,
+            last_viewers=0,
+        )
         return "unchanged"
 
     # -- alert actions ------------------------------------------------------ #
@@ -1034,15 +1179,11 @@ class KickAlerts(commands.Cog):
         channel: discord.TextChannel,
         state: Dict[str, Any],
         global_role: Optional[int],
+        *,
+        stats: Mapping[str, Any],
     ) -> bool:
         """Post the live alert. Returns ``False`` when the bot may not post."""
-        permissions = channel.permissions_for(guild.me)
-        if not (permissions.send_messages and permissions.embed_links):
-            log.warning(
-                "KickAlerts: missing Send Messages/Embed Links in #%s (guild %s)",
-                channel,
-                guild.id,
-            )
+        if not self._can_post(guild, channel, slug):
             return False
         role_id = state.get("ping_role_id") or global_role
         try:
@@ -1066,6 +1207,7 @@ class KickAlerts(commands.Cog):
             last_edit=time.time(),
             last_title=info.title,
             last_category=info.category,
+            **stats,
         )
         log.info("KickAlerts: announced %s in guild %s", slug, guild.id)
         return True
@@ -1092,17 +1234,22 @@ class KickAlerts(commands.Cog):
         settings: EmbedSettings,
         channel: discord.TextChannel,
         state: Dict[str, Any],
+        *,
+        stats: Mapping[str, Any],
     ) -> bool:
         """Edit the existing alert message with fresh numbers."""
         message_id = state.get("alert_message_id")
         if not message_id:
+            await self._store_state(guild, slug, **stats)
             return False
         try:
             message = await channel.fetch_message(int(message_id))
             await message.edit(embed=build_live_embed(info, settings))
         except discord.NotFound:
             # Someone deleted the alert; stop trying to edit it.
-            await self._store_state(guild, slug, alert_message_id=None, last_edit=None)
+            await self._store_state(
+                guild, slug, alert_message_id=None, last_edit=None, **stats
+            )
             return False
         except (discord.Forbidden, discord.HTTPException):
             log.debug("KickAlerts: could not refresh the alert for %s", slug)
@@ -1113,6 +1260,7 @@ class KickAlerts(commands.Cog):
             last_edit=time.time(),
             last_title=info.title,
             last_category=info.category,
+            **stats,
         )
         return True
 
@@ -1126,14 +1274,31 @@ class KickAlerts(commands.Cog):
         state: Dict[str, Any],
         *,
         auto_delete: bool,
+        offline_post: str,
     ) -> None:
-        """Delete the alert or turn it into the offline embed."""
+        """Finish a stream: post a summary, delete the alert, or edit it in place.
+
+        ``offline_post="new"`` replaces the live alert with a fresh post that
+        carries the stream statistics; ``"edit"`` turns the live alert into the
+        end-of-stream embed instead (``auto_delete`` affects only that path).
+        """
         message_id = state.get("alert_message_id")
-        started = parse_kick_time(state.get("started_at"))
-        duration = (datetime.now(timezone.utc) - started) if started else None
-        if message_id:
-            remove = state.get("delete_after_offline")
-            remove = auto_delete if remove is None else bool(remove)
+        summary = summarise_stream(info, state)
+        remove = state.get("delete_after_offline")
+        remove = auto_delete if remove is None else bool(remove)
+        if offline_post == "new":
+            if self._can_post(guild, channel, slug):
+                try:
+                    await channel.send(embed=build_summary_embed(info, settings, summary))
+                except discord.HTTPException:
+                    log.exception(
+                        "KickAlerts: could not post the stream summary for %s", slug
+                    )
+            # The summary replaces the live alert, otherwise both would sit in
+            # the channel and the old one would still claim the stream is live.
+            if message_id:
+                await self._delete_message(channel, message_id, slug)
+        elif message_id:
             try:
                 message = await channel.fetch_message(int(message_id))
                 if remove:
@@ -1141,7 +1306,7 @@ class KickAlerts(commands.Cog):
                 else:
                     await message.edit(
                         content=None,
-                        embed=build_offline_embed(info, settings, duration),
+                        embed=build_offline_embed(info, settings, summary),
                     )
             except discord.NotFound:
                 pass
@@ -1157,7 +1322,38 @@ class KickAlerts(commands.Cog):
             last_title=None,
             last_category=None,
             started_at=None,
+            viewer_samples=0,
+            viewer_total=0,
+            peak_viewers=0,
+            last_viewers=0,
         )
+
+    def _can_post(
+        self, guild: discord.Guild, channel: discord.TextChannel, slug: str
+    ) -> bool:
+        """Whether the bot may post embeds in this channel."""
+        permissions = channel.permissions_for(guild.me)
+        if permissions.send_messages and permissions.embed_links:
+            return True
+        log.warning(
+            "KickAlerts: missing Send Messages/Embed Links in #%s (guild %s, %s)",
+            channel,
+            guild.id,
+            slug,
+        )
+        return False
+
+    async def _delete_message(
+        self, channel: discord.TextChannel, message_id: Any, slug: str
+    ) -> None:
+        """Delete a stored alert message, ignoring one that is already gone."""
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.delete()
+        except discord.NotFound:
+            return
+        except (discord.Forbidden, discord.HTTPException, TypeError, ValueError):
+            log.debug("KickAlerts: could not delete the alert for %s", slug)
 
     async def _store_state(
         self, guild: discord.Guild, slug: str, **values: Any
@@ -1486,12 +1682,47 @@ class KickAlerts(commands.Cog):
     @kickalert.command(name="autodelete")
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_autodelete(self, ctx: commands.Context, toggle: bool) -> None:
-        """Delete the alert when the stream ends instead of editing it."""
+        """Delete the live alert when the stream ends instead of editing it.
+
+        Only affects `offlinepost edit`; in `new` mode the live alert is replaced
+        by the summary post anyway.
+        """
         await self.config.guild(ctx.guild).auto_delete.set(toggle)
         await ctx.send(
             "✅ Alerts are **deleted** when the stream ends."
             if toggle
             else "✅ Alerts are **edited** into a stream-ended message."
+        )
+
+    @kickalert.command(name="offlinepost", aliases=["endpost", "summary"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_offlinepost(
+        self, ctx: commands.Context, mode: Optional[str] = None
+    ) -> None:
+        """What happens when a stream ends: `new` summary post or `edit` the alert.
+
+        `new` removes the live alert and posts a fresh embed with stream time,
+        peak viewers and average viewers. `edit` turns the live alert into the
+        end-of-stream embed, which carries the same statistics.
+        """
+        if mode is None:
+            current = str(await self.config.guild(ctx.guild).offline_post() or "new")
+            await ctx.send(
+                f"Stream end posts: **{current}** — change it with "
+                f"`{ctx.clean_prefix}kickalert offlinepost new|edit`."
+            )
+            return
+        choice = mode.strip().lower()
+        if choice not in ("new", "edit"):
+            await ctx.send("❌ Use `new` or `edit`.")
+            return
+        await self.config.guild(ctx.guild).offline_post.set(choice)
+        await ctx.send(
+            "✅ When a stream ends I **post a new summary embed** and remove the "
+            "live alert."
+            if choice == "new"
+            else "✅ When a stream ends I **edit the live alert** into the "
+            "end-of-stream embed."
         )
 
     @kickalert.command(name="editlive")
@@ -1640,7 +1871,11 @@ class KickAlerts(commands.Cog):
         )
         embed.add_field(
             name="Stream ends",
-            value="delete the alert" if data.get("auto_delete") else "edit the alert",
+            value=(
+                "new summary post"
+                if str(data.get("offline_post") or "new") == "new"
+                else ("delete the alert" if data.get("auto_delete") else "edit the alert")
+            ),
             inline=True,
         )
         embed.add_field(
@@ -1768,16 +2003,20 @@ __all__ = [
     "KickError",
     "KickRateLimited",
     "StreamInfo",
+    "StreamSummary",
     "EmbedSettings",
+    "accumulate_viewers",
     "build_live_embed",
     "build_offline_embed",
     "build_status_embed",
     "build_debug_embed",
+    "build_summary_embed",
     "clean_slug",
     "format_uptime",
     "parse_kick_time",
     "ping_mention",
     "render_template",
+    "summarise_stream",
 ]
 
 

@@ -59,7 +59,7 @@ Notes:
 
 ### kickalerts
 
-Announces Kick.com livestreams. Talks to Kick's official public API (`api.kick.com/public/v1`) with OAuth2 app credentials, polls per guild, and keeps one message per stream: it appears when the streamer goes live, gets refreshed while the stream runs, and turns into a "stream ended" message with the duration — or is deleted — when the stream stops.
+Announces Kick.com livestreams. Talks to Kick's official public API (`api.kick.com/public/v1`) with OAuth2 app credentials, polls per guild, and keeps one message per stream: it appears when the streamer goes live and gets refreshed while the stream runs. When the stream stops, a summary embed with the stream time, peak and average viewers follows — either as a fresh post (`offlinepost new`, default) or by turning the live alert into the end-of-stream embed (`offlinepost edit`).
 
 Setup:
 
@@ -86,7 +86,8 @@ Grab API credentials at https://kick.com/settings/developer. Instead of `setcred
 | `[p]kickalert toggle <username\|all>` | Pause one streamer, or the whole server |
 | `[p]kickalert interval <30-3600>` | Poll interval in seconds for this server |
 | `[p]kickalert style <detailed\|minimal>` | Full embed, or a one-line alert |
-| `[p]kickalert autodelete <true\|false>` | Delete the alert when the stream ends instead of editing it |
+| `[p]kickalert autodelete <true\|false>` | Delete the alert when the stream ends instead of editing it (only with `offlinepost edit`) |
+| `[p]kickalert offlinepost <new\|edit>` | Stream end: post a fresh summary embed (removes the live alert) or edit the live alert in place |
 | `[p]kickalert editlive <true\|false>` | Keep refreshing the alert while the stream runs |
 | `[p]kickalert timezone <-12..14>` | Embed timestamp offset for this server |
 | `[p]kickalert toggleviewers <true\|false>` | Show or hide the viewer count |
@@ -103,6 +104,7 @@ Everything except `setcreds` needs **Manage Server**.
 Notes:
 
 - A stream is identified by its start time, so a restart of the bot, a long poll interval or a flapping API never double-posts an alert — only a genuinely new stream announces again.
+- The end-of-stream summary counts viewers on every poll, so the average is the mean of those samples and the peak is the highest one seen; the footer states how many samples the numbers are based on. A stream that ends within one poll interval has a stream time but no viewer statistics. The counters reset with every new broadcast.
 - Credentials set with `[p]set api kick …` take effect immediately, without a reload. If none are stored yet, `[p]kickalert authstatus` offers Red's owner-only form so they never have to appear in chat.
 - The poll loop backs off on rate limits (HTTP 429) and API errors and never dies from them. If the alert channel is gone or the bot lacks **Send Messages** / **Embed Links** there, the alert is skipped and retried on the next tick, so nothing is lost while permissions are fixed.
 - Deleting the alerts channel while it is configured clears the reference automatically.
