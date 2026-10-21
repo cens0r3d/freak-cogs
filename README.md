@@ -91,7 +91,7 @@ Grab API credentials at https://kick.com/settings/developer. Instead of `setcred
 | `[p]kickalert autodelete <true\|false>` | Delete the alert when the stream ends instead of editing it (only with `offlinepost edit`) |
 | `[p]kickalert offlinepost <new\|edit>` | Stream end: post a fresh summary embed (removes the live alert) or edit the live alert in place |
 | `[p]kickalert editlive <true\|false>` | Keep refreshing the alert while the stream runs |
-| `[p]kickalert timezone <-12..14>` | Timezone for the 24-hour clock times in the embeds |
+| `[p]kickalert timezone <-12..14>` | Embed timestamp offset for this server |
 | `[p]kickalert toggleviewers <true\|false>` | Show or hide the viewer count |
 | `[p]kickalert togglecategory <true\|false>` | Show or hide the category |
 | `[p]kickalert check <username>` | Look a channel up right now, without alerting |

@@ -266,9 +266,7 @@ def accumulate_viewers(state: Mapping[str, Any], viewers: Any) -> Dict[str, int]
     }
 
 
-def _summary_pairs(
-    summary: StreamSummary, tz: timezone = timezone.utc
-) -> List[Tuple[str, str]]:
+def _summary_pairs(summary: StreamSummary) -> List[Tuple[str, str]]:
     """The statistics shown in an end-of-stream embed, as name/value pairs."""
     pairs: List[Tuple[str, str]] = []
     formatted = format_uptime(summary.duration)
@@ -278,10 +276,10 @@ def _summary_pairs(
         pairs.append(("Peak viewers", f"{summary.peak_viewers:,}"))
     if summary.average_viewers is not None:
         pairs.append(("Average viewers", f"{summary.average_viewers:,}"))
-    started = _clock(summary.started_at, tz)
+    started = _stamp(summary.started_at, "t")
     if started:
         pairs.append(("Started", started))
-    ended = _clock(summary.ended_at, tz)
+    ended = _stamp(summary.ended_at, "t")
     if ended:
         pairs.append(("Ended", ended))
     return pairs
@@ -446,20 +444,6 @@ def _stamp(moment: Optional[datetime], style: str = "R") -> Optional[str]:
     if moment is None:
         return None
     return f"<t:{int(moment.timestamp())}:{style}>"
-
-
-def _clock(moment: Optional[datetime], tz: timezone) -> Optional[str]:
-    """A 24-hour clock time in the guild timezone, with the date if not today.
-
-    Discord's own time stamps follow the viewer's client locale, so anything
-    that has to read as 24-hour time is formatted here instead.
-    """
-    if moment is None:
-        return None
-    local = moment.astimezone(tz)
-    if local.date() == datetime.now(tz).date():
-        return local.strftime("%H:%M")
-    return local.strftime("%d.%m. %H:%M")
 
 
 # --------------------------------------------------------------------------- #
@@ -728,11 +712,9 @@ def build_live_embed(info: StreamInfo, settings: EmbedSettings) -> discord.Embed
             lines.append(f"**Category:** {info.category}")
         if settings.show_viewers:
             lines.append(f"**Viewers:** {info.viewers:,}")
-        started = info.started_at
-        if started is not None:
-            lines.append(
-                f"**Started:** {_clock(started, settings.tz)} ({_stamp(started)})"
-            )
+        started = _stamp(info.started_at)
+        if started:
+            lines.append(f"**Started:** {started} ({_stamp(info.started_at, 't')})")
         uptime = format_uptime(info.uptime)
         if uptime:
             lines.append(f"**Live for:** {uptime}")
@@ -773,7 +755,7 @@ def build_offline_embed(
         timestamp=datetime.now(settings.tz),
     )
     embed.set_author(name=f"{info.slug} is offline", url=info.url)
-    for name, value in _summary_pairs(summary, settings.tz):
+    for name, value in _summary_pairs(summary):
         embed.add_field(name=name, value=value, inline=True)
     if info.banner:
         embed.set_thumbnail(url=info.banner)
@@ -799,7 +781,7 @@ def build_summary_embed(
         lines.append(f"**Category:** {summary.category}")
     lines.append(f"[Visit channel]({info.url})")
     embed.description = "\n".join(lines)
-    for name, value in _summary_pairs(summary, settings.tz):
+    for name, value in _summary_pairs(summary):
         embed.add_field(name=name, value=value, inline=True)
     if info.banner:
         embed.set_thumbnail(url=info.banner)
@@ -892,7 +874,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.2.1"
+    __version__ = "3.2.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1757,11 +1739,10 @@ class KickAlerts(commands.Cog):
     @kickalert.command(name="timezone", aliases=["tz"])
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_timezone(self, ctx: commands.Context, offset: int) -> None:
-        """Set the timezone offset for the times in the embeds (-12 to 14).
+        """Set the offset for embed timestamps (-12 to 14).
 
-        Clock times (stream start and end) are rendered as 24-hour time in this
-        timezone; relative times ("in 5 minutes") stay Discord timestamps and
-        follow each viewer's own client.
+        Times inside the embeds are Discord timestamps and always render in the
+        viewer's own timezone; this offset only affects the embed's own timestamp.
         """
         if not -12 <= offset <= 14:
             await ctx.send("❌ Choose an offset between -12 and +14.")
