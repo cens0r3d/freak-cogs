@@ -421,8 +421,10 @@ with all three tier values resolved, items, offerings and maps.
 Notes:
 
 - Names are matched loosely: case, punctuation, accents and `&`/`and` do not matter, so
-  `hex ruin`, `Hex: Ruin`, `quick and quiet`, `alexs toolbox` and `onryo` all resolve. An
-  ambiguous query answers with a candidate list instead of guessing.
+  `hex ruin`, `Hex: Ruin`, `quick and quiet`, `alexs toolbox` and `onryo` all resolve.
+  Matching is exact → prefix → whole word → substring, with minimum lengths so that `hex`
+  does not hit *The Xenomorph*. An ambiguous query answers with a candidate list instead
+  of guessing, an unknown one with the closest names as a hint.
 - **Perk descriptions are rendered, not dumped.** The payload stores placeholders such as
   `{Tunable.S02P03.Haste%}` next to a `tunables` table; the cog substitutes them per tier,
   which is why Sprint Burst reads "50 % Haste for 2 s" and Hex: Ruin reads
@@ -441,6 +443,7 @@ Notes:
   never tracebacks.
 - **No requirements** — `aiohttp` ships with Red. Nothing is stored per user, so the cog has
   no data-deletion surface.
+- Full manual: [`dbd/README.md`](dbd/README.md).
 
 ## Extra setup
 
