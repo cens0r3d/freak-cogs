@@ -325,6 +325,7 @@ Notes:
 - **No requirements** — only what Red already ships.
 - Settings per server: results per page (default 8), marketplace currency (default `EUR`,
   e.g. `CHF`), thumbnails on/off.
+- Full manual: [`discogs/README.md`](discogs/README.md).
 
 ### idlerpg
 
