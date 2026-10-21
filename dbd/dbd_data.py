@@ -198,11 +198,37 @@ def build_index(
     return index
 
 
-def lookup(index: Dict[str, str], query: str) -> Tuple[Optional[str], List[str]]:
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def build_token_index(entries: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Map every normalised word of every name to the payload keys containing it.
+
+    Substring matching over the squashed name alone is too generous ("hex" hides inside
+    "The Xenomorph"), so single words are matched on word boundaries instead.
+    """
+    tokens: Dict[str, List[str]] = {}
+    for key, entry in entries.items():
+        for word in _WORD.findall(str(entry.get("name") or "")):
+            normed = norm(word)
+            if normed:
+                bucket = tokens.setdefault(normed, [])
+                if key not in bucket:
+                    bucket.append(key)
+    return tokens
+
+
+def lookup(
+    index: Dict[str, str],
+    query: str,
+    tokens: Optional[Dict[str, List[str]]] = None,
+) -> Tuple[Optional[str], List[str]]:
     """Resolve a user query against an index.
 
-    Returns ``(key, candidates)``. Exact normalised match wins, then prefix matches, then
-    substring matches; several equally good candidates come back as a suggestion list.
+    Returns ``(key, candidates)``. Exact normalised match wins, then prefix matches (for
+    queries of four characters or more), then whole-word matches, and only from five
+    characters on a substring match.
+    Anything ambiguous comes back as a candidate list instead of a guess.
     """
     needle = norm(query)
     if not needle:
@@ -212,18 +238,29 @@ def lookup(index: Dict[str, str], query: str) -> Tuple[Optional[str], List[str]]
     if exact is not None:
         return exact, []
 
-    prefixed = sorted(
-        {key for normed, key in index.items() if normed.startswith(needle)}
-    )
-    if len(prefixed) == 1:
-        return prefixed[0], []
-    if prefixed:
-        return None, prefixed
+    if len(needle) >= 4:
+        prefixed = sorted(
+            {key for normed, key in index.items() if normed.startswith(needle)}
+        )
+        if len(prefixed) == 1:
+            return prefixed[0], []
+        if prefixed:
+            return None, prefixed
 
-    contained = sorted({key for normed, key in index.items() if needle in normed})
-    if len(contained) == 1:
-        return contained[0], []
-    return None, contained
+    if tokens:
+        word_hits = sorted(set(tokens.get(needle, ())))
+        if len(word_hits) == 1:
+            return word_hits[0], []
+        if word_hits:
+            return None, word_hits
+
+    if len(needle) >= 5:
+        contained = sorted({key for normed, key in index.items() if needle in normed})
+        if len(contained) == 1:
+            return contained[0], []
+        if contained:
+            return None, contained
+    return None, []
 
 
 def suggest(

@@ -30,6 +30,7 @@ from redbot.core.utils.menus import DEFAULT_CONTROLS, menu
 from .dbd_data import (
     ITEM_TYPES,
     build_index,
+    build_token_index,
     chunk,
     clean,
     difficulty_parts,
@@ -105,6 +106,7 @@ class DBD(commands.Cog):
         self._icon_lock = asyncio.Lock()
         self._warm_task: Optional[asyncio.Task] = None
         self._indexes: Dict[str, Dict[str, str]] = {}
+        self._token_indexes: Dict[str, Dict[str, List[str]]] = {}
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -198,7 +200,7 @@ class DBD(commands.Cog):
                 if cached and isinstance(cached.get("data"), dict):
                     self._data = cached["data"]
                     self._stamp = float(cached.get("stamp", time.time()))
-                    self._indexes.clear()
+                    self._clear_indexes()
                     return self._data
 
             try:
@@ -213,7 +215,7 @@ class DBD(commands.Cog):
                 if fallback and isinstance(fallback.get("data"), dict):
                     self._data = fallback["data"]
                     self._stamp = float(fallback.get("stamp", 0))
-                    self._indexes.clear()
+                    self._clear_indexes()
                     log.warning("DBD API unreachable (%s), serving stale cache", error)
                     return self._data
                 raise DbdError(
@@ -226,7 +228,7 @@ class DBD(commands.Cog):
                 data[name] = result if isinstance(result, dict) else {}
             self._data = data
             self._stamp = time.time()
-            self._indexes.clear()
+            self._clear_indexes()
             self._write_cache(self._cache_file, {"stamp": self._stamp, "data": data})
             log.info(
                 "DBD data refreshed: %s",
@@ -260,6 +262,17 @@ class DBD(commands.Cog):
             index = build_index(self._data.get(name) or {})
             self._indexes[name] = index
         return index
+
+    def _token_index(self, name: str) -> Dict[str, List[str]]:
+        tokens = self._token_indexes.get(name)
+        if tokens is None:
+            tokens = build_token_index(self._data.get(name) or {})
+            self._token_indexes[name] = tokens
+        return tokens
+
+    def _clear_indexes(self) -> None:
+        self._indexes.clear()
+        self._token_indexes.clear()
 
     # ------------------------------------------------------------------ icons
 
@@ -488,12 +501,13 @@ class DBD(commands.Cog):
     ) -> Tuple[Optional[Dict[str, Any]], List[str], List[str]]:
         """Resolve a query in one payload table.
 
-        Returns ``(entry, suggestion_names, all_names)`` - entry is ``None`` when the query
-        is ambiguous or unknown.
+        Returns ``(entry, candidates, suggestions)``. ``entry`` is ``None`` when the query is
+        ambiguous or unknown; ``candidates`` are real matches for that query, ``suggestions``
+        are merely similar names offered as a hint.
         """
         table = self._data.get(kind) or {}
         index = self._index(kind)
-        key, candidates = lookup(index, query)
+        key, candidates = lookup(index, query, self._token_index(kind))
         if key is not None:
             entry = table.get(key)
             if isinstance(entry, dict):
@@ -503,9 +517,9 @@ class DBD(commands.Cog):
             for c in candidates
             if isinstance(table.get(c), dict)
         ]
-        if not names:
-            names = suggest(table, query)
-        return None, names, []
+        if names:
+            return None, names, []
+        return None, [], suggest(table, query)
 
     # ------------------------------------------------------------------ commands
 
@@ -561,9 +575,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("characters", name)
+        entry, candidates, suggestions = self._find("characters", name)
         if entry is None:
-            await self._send_miss(ctx, "character", name, candidates)
+            await self._send_miss(ctx, "character", name, candidates, suggestions)
             return
         role = (entry.get("role") or "").lower()
         if expected and role != expected:
@@ -584,9 +598,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("perks", name)
+        entry, candidates, suggestions = self._find("perks", name)
         if entry is None:
-            await self._send_miss(ctx, "perk", name, candidates)
+            await self._send_miss(ctx, "perk", name, candidates, suggestions)
             return
         await ctx.send(embed=self._perk_embed(entry))
 
@@ -596,9 +610,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("items", name)
+        entry, candidates, suggestions = self._find("items", name)
         if entry is None:
-            await self._send_miss(ctx, "item", name, candidates)
+            await self._send_miss(ctx, "item", name, candidates, suggestions)
             return
         await ctx.send(embed=self._item_embed(entry))
 
@@ -608,9 +622,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("offerings", name)
+        entry, candidates, suggestions = self._find("offerings", name)
         if entry is None:
-            await self._send_miss(ctx, "offering", name, candidates)
+            await self._send_miss(ctx, "offering", name, candidates, suggestions)
             return
         await ctx.send(embed=self._offering_embed(entry))
 
@@ -620,9 +634,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("maps", name)
+        entry, candidates, suggestions = self._find("maps", name)
         if entry is None:
-            await self._send_miss(ctx, "map", name, candidates)
+            await self._send_miss(ctx, "map", name, candidates, suggestions)
             return
         await ctx.send(embed=self._map_embed(entry))
 
@@ -632,9 +646,9 @@ class DBD(commands.Cog):
         await self._ensure_icons()
         if await self._data_or_fail(ctx) is None:
             return
-        entry, candidates, _ = self._find("characters", name)
+        entry, candidates, suggestions = self._find("characters", name)
         if entry is None:
-            await self._send_miss(ctx, "character", name, candidates)
+            await self._send_miss(ctx, "character", name, candidates, suggestions)
             return
         story = clean(entry.get("story"))
         if not story:
@@ -928,7 +942,12 @@ class DBD(commands.Cog):
     # ------------------------------------------------------------------ misses
 
     async def _send_miss(
-        self, ctx: commands.Context, kind: str, query: str, candidates: Sequence[str]
+        self,
+        ctx: commands.Context,
+        kind: str,
+        query: str,
+        candidates: Sequence[str],
+        suggestions: Sequence[str] = (),
     ) -> None:
         colour = await ctx.embed_color()
         if candidates:
@@ -942,11 +961,16 @@ class DBD(commands.Cog):
                 )
             )
             return
+        description = (
+            f"Try `{ctx.clean_prefix}dbd list {kind}s` or a shorter search term."
+        )
+        if suggestions:
+            description = "Closest names:\n" + "\n".join(
+                f"• {name}" for name in list(suggestions)[:5]
+            )
         await ctx.send(
             embed=self._error_embed(
-                colour,
-                f"No {kind} found for “{query}”",
-                f"Try `{ctx.clean_prefix}dbd list {kind}s` or a shorter search term.",
+                colour, f"No {kind} found for “{query}”", description
             )
         )
 
