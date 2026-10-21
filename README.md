@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs
 ```
 
 Or install one at a time:
@@ -20,6 +20,7 @@ Or install one at a time:
 [p]cog install freak-cogs micwatch
 [p]cog install freak-cogs osint
 [p]cog install freak-cogs idlerpg
+[p]cog install freak-cogs discogs
 ```
 
 ## Cogs
@@ -268,6 +269,63 @@ Notes:
 - Answers are cached for 30 minutes per target; `[p]osint set clearcache` drops that cache. Lookups can be limited to specific channels and throttled per member, and an audit channel can log every lookup.
 - Sources and their limits are listed in-game by `[p]osint sources`; the EXIF command's own caveat is that Discord re-encodes uploaded images and drops their metadata, so use a URL to the original file for a photo.
 
+### discogs
+
+Search the [Discogs](https://www.discogs.com) database from Discord: releases, master
+releases, artists and labels, with tracklists, credits, ratings and marketplace prices.
+**No API key needed** — the API answers anonymously, and a free user token only raises the
+rate limit from 25 to 60 requests per minute.
+
+```
+[p]discogs daft punk
+[p]discogs search blue monday --format Vinyl --country UK --sort want
+[p]discogs release 249504
+[p]discogs artist aphex twin
+[p]discogs random --genre Jazz --decade 60s
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]discogs <query>` | Quick release search |
+| `[p]discogs search <query> [flags]` | Full search with filters (see below) |
+| `[p]discogs release <id>` | One release: facts, tracklist, credits, identifiers, videos, rating, price |
+| `[p]discogs master <id>` | The master release behind all pressings, with a **Versions** button |
+| `[p]discogs artist <name>` | Artist profile with a **Releases** button (paginated catalogue) |
+| `[p]discogs label <name>` | Label profile with a **Releases** button |
+| `[p]discogs versions <master>` | Every pressing/version of a master release |
+| `[p]discogs top [flags]` | The most wanted records, optionally by genre/style/year |
+| `[p]discogs random [flags]` | Draw a random record |
+| `[p]discogs token` | Store an optional Discogs user token (bot owner, secure form) |
+| `[p]discogs status` | API state, rate-limit window, cache, this server's settings |
+| `[p]discogs clearcache` | Drop the in-memory cache (bot owner) |
+| `[p]discogs set ...` | Per-server settings (Manage Server) |
+
+Search flags: `--type release|master|artist|label`, `--genre`, `--style`, `--year`,
+`--country`, `--format`, `--label`, `--artist`, `--catno`,
+`--sort year|artist|title|label|catno|format|rating|added|want`, `--limit 1-25`.
+`top` and `random` take `--genre`, `--style`, `--year`, `--country` (`random` also
+`--decade 60s|1990s`). Quote values that contain a space: `--style "Detroit Techno"`.
+
+Notes:
+
+- **Every result list is interactive**: the picker opens a detail view, the buttons page
+  through results. Detail views page through long tracklists and profiles instead of
+  truncating them, and carry an **Open on Discogs** link.
+- **Genres vs. styles**: Discogs has 15 genres and hundreds of styles. Typing a style as a
+  genre (`--genre Techno`) would return nothing, so the cog maps it and says so in the
+  footer.
+- **Rate limits are respected, not fought**: the client reads `X-Discogs-Ratelimit` from
+  every response, keeps a sliding one-minute window and waits instead of collecting `429`s;
+  responses are cached (5 min for searches, 30 min for entries) so paging back and forth
+  costs nothing.
+- **A missing record, an empty search or a slow API is an embed**, never a traceback.
+- **Token (optional)**: create one at <https://www.discogs.com/settings/developers> and
+  either press the button in `[p]discogs token` or run
+  `[p]set api discogs token,<token>` — it takes effect immediately, no reload.
+- **No requirements** — only what Red already ships.
+- Settings per server: results per page (default 8), marketplace currency (default `EUR`,
+  e.g. `CHF`), thumbnails on/off.
+
 ### idlerpg
 
 The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Discord cog. Register a character and it levels purely by idling: every level-up finds an item, and the level-up may start a battle against anyone else present. No IRC server, no password — the Discord account *is* the login, and **every guild is its own realm** with its own settings.
@@ -332,6 +390,7 @@ Notes:
 - **voicesay** — needs **ffmpeg** and **ffprobe** on the host to convert audio that is not already OGG Opus.
 - **micwatch** — needs the **Move Members** permission (plus **Connect** for `speak` mode). `speak` mode additionally needs voice support in the bot venv: `pip install -U "Red-DiscordBot[voice]"` (or `[p]pipinstall pynacl davey`), then `[p]reload micwatch`. `pynacl` does the voice transport encryption, `davey` the Discord E2EE (DAVE) session discord.py 2.6+ negotiates.
 - **idlerpg** — nothing to install. The bot needs **Send Messages** and **Embed Links** in the announcement channel; `[p]irpg set role` additionally needs **Manage Roles**, with the bot's role above the one it hands out.
+- **discogs** — nothing to install or configure. Optionally store a user token for a higher rate limit (see above). Data comes from api.discogs.com; the requests carry a `freak-cogs-discogs` user agent and the bot host's IP.
 - **naminter** — nothing to configure, but `[p]cog install` pulls the `naminter` package (curl-cffi, orjson, jsonschema plus the upstream CLI extras: rich, uvloop, weasyprint), so the install step takes noticeably longer than the other cogs. Python 3.11 or newer is required, and the host needs outbound HTTPS to `raw.githubusercontent.com` and to the sites being checked.
 
 ## Requirements

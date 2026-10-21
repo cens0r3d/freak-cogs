@@ -1,0 +1,28 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Thank you for installing Discogs!\n\nSetup: nothing is required. The API answers without a token, so `[p]discogs daft punk` works right away — a free user token only raises the rate limit from 25 to 60 requests per minute.\n\nUsage: `[p]discogs search <query>` searches releases, `--type master|artist|label` switches the index, and `--genre`, `--style`, `--year`, `--country`, `--format`, `--label`, `--artist`, `--sort` narrow it down. `[p]discogs release|master|artist|label <id or name>` opens a full entry, `[p]discogs random` draws a record, `[p]discogs top` lists the most wanted ones.\n\nOptional token: generate one at https://www.discogs.com/settings/developers and store it with `[p]discogs token` (bot owner, secure form) or `[p]set api discogs token,<token>`. Takes effect immediately, no reload.\n\nData: guild settings only (results per page, marketplace currency, thumbnails) in Red's Config, the optional token in Red's shared API token store. Responses are cached in memory and dropped on restart.",
+    "name": "Discogs",
+    "short": "Search Discogs: releases, masters, artists, labels and tracklists.",
+    "description": "Browse the Discogs database from Discord. Search releases, masters, artists and labels with filters for genre, style, year, country, format and catalogue number; open a record's tracklist, credits, identifiers, community rating and marketplace price; walk an artist's or a label's catalogue page by page; list every pressing of a master release; draw a random record by genre or decade; and list the most wanted records. Results and detail pages are interactive views with a picker, and the client respects Discogs' rate limits (25 requests per minute anonymously, 60 with an optional free user token) by waiting instead of collecting 429s, with an in-memory response cache.",
+    "end_user_data_statement": "This cog stores guild settings only (results per page, marketplace currency and the thumbnail preference) in Red's Config. Search queries and Discogs responses are cached in memory for up to 30 minutes and dropped when the bot restarts. Queries are sent to api.discogs.com; no Discord user data leaves the bot. An optional Discogs API token is kept in Red's shared API token store.",
+    "requirements": [],
+    "tags": [
+        "discogs",
+        "music",
+        "vinyl",
+        "search",
+        "database",
+        "marketplace"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
