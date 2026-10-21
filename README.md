@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs dbd
 ```
 
 Or install one at a time:
@@ -21,6 +21,7 @@ Or install one at a time:
 [p]cog install freak-cogs osint
 [p]cog install freak-cogs idlerpg
 [p]cog install freak-cogs discogs
+[p]cog install freak-cogs dbd
 ```
 
 ## Cogs
@@ -386,8 +387,66 @@ Notes:
 - **No requirements** — only what Red already ships.
 - Full manual, formulas and defaults: [`idlerpg/README.md`](idlerpg/README.md).
 
+### dbd
+
+Dead by Daylight information: killers with move speed and terror radius, survivors, perks
+with all three tier values resolved, items, offerings and maps.
+
+```
+[p]dbd killer nurse
+[p]dbd survivor dwight
+[p]dbd perk hex ruin
+[p]dbd item toolbox
+[p]dbd map greenville
+[p]dbd list perks killer
+[p]dbd search ruin
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]dbd killer <name>` | A killer: difficulty, gender, height, move speed, terror radius, personal perks, bio |
+| `[p]dbd survivor <name>` | A survivor, same layout |
+| `[p]dbd char <name>` | Either of the two, without the role filter |
+| `[p]dbd perk <name>` | A perk with its description, owner, teachable level and categories |
+| `[p]dbd item <name>` | An item: description, type, rarity |
+| `[p]dbd offering <name>` | An offering: description, rarity, type, tags |
+| `[p]dbd map <name>` | A map with its realm |
+| `[p]dbd lore <name>` | The full backstory, paginated |
+| `[p]dbd random [perks\|killers\|survivors]` | Roll a random entry |
+| `[p]dbd search <text>` | Search every table at once |
+| `[p]dbd list <killers\|survivors\|perks\|items\|offerings\|maps> [role]` | Browse a table, paginated |
+| `[p]dbd stats` | Row counts, cache age and how many icons are mapped |
+| `[p]dbd refresh` | Force a reload from the data source (bot owner) |
+
+Notes:
+
+- Names are matched loosely: case, punctuation, accents and `&`/`and` do not matter, so
+  `hex ruin`, `Hex: Ruin`, `quick and quiet`, `alexs toolbox` and `onryo` all resolve. An
+  ambiguous query answers with a candidate list instead of guessing.
+- **Perk descriptions are rendered, not dumped.** The payload stores placeholders such as
+  `{Tunable.S02P03.Haste%}` next to a `tunables` table; the cog substitutes them per tier,
+  which is why Sprint Burst reads "50 % Haste for 2 s" and Hex: Ruin reads
+  "100/125/150 %". Status effects and input prompts are spelled out the same way.
+- **Killer numbers come from the game data**, not from text: `MaxWalkSpeed` 460 becomes
+  "4.6 m/s (115 %)" against the 4.0 m/s survivor base, `TerrorRadius` 3200 becomes "32 m".
+- Data source is the community JSON API behind <https://dbd.tricky.lol> (`/api/characters`,
+  `/api/perks`, `/api/items`, `/api/offerings`, `/api/maps`) — no key, no login. The payload
+  is cached in memory for 12 hours and on disk under the cog's data directory, so a restart
+  or a short outage still answers; `[p]dbd refresh` forces a reload.
+- Perk icons and killer portraits are optional: the cog reads the file listings of three
+  public GitHub repositories once every few days and only links an image for a name that
+  really exists there. Survivors have no portrait set upstream, so their embeds stay without
+  a thumbnail. If GitHub is unreachable, everything still renders — just without images.
+- A miss, an ambiguous query, a wrong-role request and an unreachable API are all embeds,
+  never tracebacks.
+- **No requirements** — `aiohttp` ships with Red. Nothing is stored per user, so the cog has
+  no data-deletion surface.
+
 ## Extra setup
 
+- **dbd** — nothing to configure. The host needs outbound HTTPS to `dbd.tricky.lol` and
+  `api.github.com`/`raw.githubusercontent.com` (the latter only for images). The bot needs
+  **Embed Links** in the channels where it is used.
 - **vcstatus** — the bot needs the **Set Voice Channel Status** permission, plus **Manage Channels** while it is not connected to that channel.
 - **kickalerts** — needs OAuth2 app credentials from https://kick.com/settings/developer. Store them with `[p]kickalert setcreds <client_id> <client_secret>` (or `[p]set api kick client_id,<id> client_secret,<secret>`) and verify with `[p]kickalert authstatus`. The bot needs **View Channel**, **Send Messages** and **Embed Links** in the alert channel.
 - **voicesay** — needs **ffmpeg** and **ffprobe** on the host to convert audio that is not already OGG Opus.
