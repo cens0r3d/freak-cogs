@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs dbd
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs dbd psychonaut
 ```
 
 Or install one at a time:
@@ -22,6 +22,7 @@ Or install one at a time:
 [p]cog install freak-cogs idlerpg
 [p]cog install freak-cogs discogs
 [p]cog install freak-cogs dbd
+[p]cog install freak-cogs psychonaut
 ```
 
 ## Cogs
@@ -446,6 +447,51 @@ Notes:
 - **No requirements** — `aiohttp` ships with Red. Nothing is stored per user, so the cog has
   no data-deletion surface.
 - Full manual: [`dbd/README.md`](dbd/README.md).
+
+### psychonaut
+
+Psychoactive substance reference from [PsychonautWiki](https://psychonautwiki.org):
+class, routes of administration with dose ranges, durations, bioavailability, tolerance,
+addiction and toxicity notes, interaction warnings and the documented subjective effects.
+
+```
+[p]psychonaut lsd
+[p]psychonaut dose ketamine insufflated
+[p]psychonaut interactions mdma
+[p]psychonaut class dissociative
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]psychonaut <name>` | Overview: class, street names, routes, tolerance, toxicity, addiction potential, intro and structure image |
+| `[p]psychonaut dose <name> [route]` | Threshold/light/common/strong/heavy plus the full duration breakdown and bioavailability, one field per route |
+| `[p]psychonaut effects <name>` | Subjective effects grouped as physical, visual, cognitive, auditory, multisensory, transpersonal, after effects |
+| `[p]psychonaut interactions <name>` | Dangerous, unsafe and uncertain combinations |
+| `[p]psychonaut search <text>` | Search canonical names and street names |
+| `[p]psychonaut class [class]` | Every class with a count, or the substances inside one class |
+| `[p]psychonaut random [class]` | Random substance, optionally from one class |
+| `[p]psychonaut stats` | Index size and age, cached pages, cache size |
+| `[p]psychonaut refresh` | Drop the cache and reload the index (bot owner) |
+
+Notes:
+
+- Aliases are honoured, so `acid`, `lucy`, `cid` and `tabs` all reach LSD, `keta` Ketamine,
+  `2cb` 2C-B and `shrooms` Psilocybin mushrooms. Matching runs exact → compacted (spaces and
+  punctuation ignored) → prefix from three characters → whole word → substring from four,
+  and an ambiguous query answers with a candidate list instead of picking one.
+- **Two sources, each where it is stronger.** `api.psychonautwiki.org` (GraphQL) supplies the
+  structured data — classes, tolerance, toxicity, cross-tolerances and per-route dose ranges,
+  bioavailability and duration breakdowns, plus the three interaction lists. The MediaWiki API
+  at `/w/api.php` supplies what GraphQL exposes badly or not at all: the article intro, the
+  structure image from `Template:SubstanceBox/<name>` (rendered to PNG) and the subjective
+  effect lists. GraphQL's own `summary`, `effects` and `erowid` fields are deliberately unused —
+  they return template noise, the substance's own name, or nothing.
+- The index (373 substances, ~960 names and aliases) is cached for 7 days, detail pages for 30,
+  in memory and on disk under the cog's data directory; a failed fetch serves the cached copy.
+- Harm reduction reference only. Dosages are copied verbatim from the wiki with their units, and
+  every dosing embed says so; the cog never advises a dose.
+- **No requirements** — `aiohttp` ships with Red, no key, no login, nothing stored per user.
+- Full manual: [`psychonaut/README.md`](psychonaut/README.md).
 
 ## Extra setup
 
