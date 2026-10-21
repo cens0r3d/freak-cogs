@@ -1,0 +1,32 @@
+{
+    "name": "DBD",
+    "author": [
+        "cens0r3d"
+    ],
+    "description": "Dead by Daylight information: killers with move speed and terror radius, survivors, perks with all three tier values resolved, items, offerings and maps. Data is fetched from the community JSON API behind dbd.tricky.lol, cached in memory and on disk, and browsable through paginated lists and a global search.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not store any End User Data.",
+    "hidden": false,
+    "install_msg": "Thanks for installing DBD! Use `[p]dbd` for the command overview. No configuration and no API key needed: the cog pulls the current game data on first use and keeps a local copy for outages. Perk and portrait images are loaded from public GitHub repositories and only appear when the file exists there.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        8,
+        0
+    ],
+    "permissions": [
+        "embed_links",
+        "attach_files"
+    ],
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Dead by Daylight killers, survivors, perks and maps",
+    "tags": [
+        "dbd",
+        "dead by daylight",
+        "gaming",
+        "lookup",
+        "info"
+    ],
+    "type": "COG"
+}
