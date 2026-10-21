@@ -151,17 +151,39 @@ left out rather than half-built.
 
 ## Images
 
-Perk icons and killer portraits are optional eye candy from three public mirrors
-on GitHub (`profsoru/dbd-perk-icons`, `profsoru/dbd-killer-perk-icons`,
-`profsoru/dbd-killer-portraits`).
+Icons are optional eye candy. The primary source is
+[`Zawgalicious/DBDImages`](https://github.com/Zawgalicious/DBDImages), which keeps every
+icon in one tree, so a single recursive listing maps all of them:
 
-- The cog reads each repository's file listing at most once every **3 days**
-  (cached on disk), and only links an image when the file really exists — a perk
-  whose icon name differs on disk simply gets no thumbnail instead of a broken
-  image box.
-- Survivors have no portrait set upstream, so their embeds stay text-only.
-- If GitHub is unreachable or rate-limited, everything still renders, just without
-  images.
+| Folder | Used for | Coverage against the dataset |
+| --- | --- | --- |
+| `images/characters/survivor/` | survivor portraits | 51/54 |
+| `images/characters/killer/` | killer portraits | 42/44 |
+| `images/perks/survivor/` | survivor perk icons | 173/176 |
+| `images/perks/killer/` | killer perk icons | 145/145 |
+| `images/maps/` | map thumbnails | 57/59 |
+| `images/offerings/` | offering thumbnails | 98/125 |
+| `images/items/` | item thumbnails | 42/98 |
+
+(`profsoru/dbd-perk-icons` and `profsoru/dbd-killer-perk-icons` are read as a second pass
+and only fill perk gaps, so the main tree stays authoritative. `images/items/` is thin
+because that mirror only carries the higher-rarity variants — a missing icon is fine, a
+wrong one is not.)
+
+- The listing is read at most once every **3 days** and cached on disk, then only files
+  that really exist are linked. Nothing builds a URL out of a name and hopes.
+- **File names are inconsistent**, so lookups try several keys: the name, the name without
+  `The`, `&` written as `and` and as nothing, the possessive both ways (`dragonsgrip` and
+  `dragongrip`), initials stripped (`leonscottkennedy` for *Leon S. Kennedy*), the quoted
+  nickname (`billoverbeck` for *William "Bill" Overbeck*), then single words (`davidtapp`
+  for *Detective Tapp*), then an unambiguous partial match, and finally a ≥0.9 spelling
+  match (that one catches the mirror's own `barbecueandchilli` typo).
+- When none of that is clear the entry simply gets **no** thumbnail: an empty corner beats
+  the wrong character's face. *The Slasher* and *The Judgment* have no file upstream, and
+  several of the newest items are missing too.
+- If GitHub is unreachable or rate-limited, every command still renders — just without
+  images. The icon cache carries a format version, so a stale cache from an older release
+  is discarded instead of producing dead links.
 
 ## Errors are embeds
 

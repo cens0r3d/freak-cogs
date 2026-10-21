@@ -435,10 +435,12 @@ Notes:
   `/api/perks`, `/api/items`, `/api/offerings`, `/api/maps`) — no key, no login. The payload
   is cached in memory for 12 hours and on disk under the cog's data directory, so a restart
   or a short outage still answers; `[p]dbd refresh` forces a reload.
-- Perk icons and killer portraits are optional: the cog reads the file listings of three
-  public GitHub repositories once every few days and only links an image for a name that
-  really exists there. Survivors have no portrait set upstream, so their embeds stay without
-  a thumbnail. If GitHub is unreachable, everything still renders — just without images.
+- Perk icons, survivor and killer portraits, items, offerings and maps all carry thumbnails
+  from one public GitHub mirror (`Zawgalicious/DBDImages`), with a second perk mirror as a
+  fallback. The file listing is read once every few days and a name is only linked when the
+  file really exists; matching copes with the mirror's squashed and inconsistent file names
+  (nicknames, dropped initials, possessive spellings, even a typo) and prefers no image over
+  a wrong one. If GitHub is unreachable, everything still renders — just without images.
 - A miss, an ambiguous query, a wrong-role request and an unreachable API are all embeds,
   never tracebacks.
 - **No requirements** — `aiohttp` ships with Red. Nothing is stored per user, so the cog has
