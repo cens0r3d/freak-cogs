@@ -5,9 +5,9 @@ current game build (killers, survivors, perks, items, offerings, maps).  The pay
 fetched once, cached in memory for a few hours and on disk under the cog's data directory,
 so a restart or a short outage of the API does not empty the commands.
 
-Perk icons and killer portraits are optional eye candy: they are served from GitHub
-repositories that follow the same names, and the cog only links an image after checking
-that the file actually exists in the repository listing.
+Icons are optional eye candy: one GitHub mirror keeps every icon in a single tree
+(survivor and killer portraits, perks per role, items, offerings, maps), the cog reads that
+listing and links a file only after confirming it exists. A second mirror covers perk gaps.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from .dbd_data import (
     norm,
     perk_text,
     rarity_parts,
+    resolve_icon,
     resolve_placeholders,
     role_parts,
     suggest,
@@ -55,12 +56,29 @@ API_BASE = "https://dbd.tricky.lol/api"
 API_SITE = "https://dbd.tricky.lol"
 CACHE_TTL = 12 * 3600
 ICON_TTL = 3 * 86400
+ICON_CACHE_VERSION = 2
 REQUEST_TIMEOUT = 20
 
-ICON_REPOS = {
+# One mirror keeps every icon in a single tree, so one recursive listing maps them all:
+# survivor *and* killer portraits, perks per role, items, offerings and maps.
+ICON_TREE_REPO = "Zawgalicious/DBDImages"
+ICON_TREE_API = (
+    f"https://api.github.com/repos/{ICON_TREE_REPO}/git/trees/main?recursive=1"
+)
+ICON_RAW_BASE = f"https://raw.githubusercontent.com/{ICON_TREE_REPO}/main"
+ICON_FOLDERS = {
+    "images/characters/survivor/": "portrait_survivor",
+    "images/characters/killer/": "portrait_killer",
+    "images/perks/survivor/": "perk_survivor",
+    "images/perks/killer/": "perk_killer",
+    "images/items/": "item",
+    "images/offerings/": "offering",
+    "images/maps/": "map",
+}
+# Second opinion for perks only, filling whatever the tree above is missing.
+ICON_FALLBACKS = {
     "perk_survivor": "profsoru/dbd-perk-icons",
     "perk_killer": "profsoru/dbd-killer-perk-icons",
-    "portrait": "profsoru/dbd-killer-portraits",
 }
 
 # payload key -> what the API calls it
@@ -102,6 +120,7 @@ class DBD(commands.Cog):
         self._stamp: float = 0.0
         self._data_lock = asyncio.Lock()
         self._icons: Dict[str, Dict[str, str]] = {}
+        self._icons_extra: Dict[str, Dict[str, str]] = {}
         self._icons_stamp: float = 0.0
         self._icon_lock = asyncio.Lock()
         self._warm_task: Optional[asyncio.Task] = None
@@ -283,52 +302,101 @@ class DBD(commands.Cog):
             if self._icons and time.time() - self._icons_stamp < ICON_TTL:
                 return
             cached = self._read_cache(self._icon_file, ICON_TTL * 4)
-            if cached and isinstance(cached.get("data"), dict):
+            if (
+                cached
+                and cached.get("version") == ICON_CACHE_VERSION
+                and isinstance(cached.get("data"), dict)
+            ):
                 self._icons = cached["data"]
+                extra = cached.get("extra")
+                self._icons_extra = extra if isinstance(extra, dict) else {}
                 self._icons_stamp = float(cached.get("stamp", time.time()))
                 return
             found: Dict[str, Dict[str, str]] = {}
             try:
-                listings = await asyncio.gather(
-                    *(
-                        self._get_json(f"https://api.github.com/repos/{repo}/contents/")
-                        for repo in ICON_REPOS.values()
-                    )
-                )
+                tree = await self._get_json(ICON_TREE_API)
             except Exception:  # noqa: BLE001 - icons are optional
-                log.debug("could not read icon listings", exc_info=True)
-                return
-            for index, kind in enumerate(ICON_REPOS.keys()):
-                listing = listings[index]
-                if not isinstance(listing, list):
+                log.debug("could not read the icon tree", exc_info=True)
+                tree = {}
+            for entry in (tree.get("tree") or []) if isinstance(tree, dict) else []:
+                if not isinstance(entry, dict) or entry.get("type") != "blob":
                     continue
-                found[kind] = {
-                    norm(str(entry.get("name", "")).rsplit(".", 1)[0]): str(
-                        entry.get("name")
-                    )
-                    for entry in listing
-                    if isinstance(entry, dict)
-                    and str(entry.get("name", "")).lower().endswith(".png")
-                }
-            if not found:
+                path = str(entry.get("path") or "")
+                if not path.lower().endswith(".png"):
+                    continue
+                for prefix, icon_kind in ICON_FOLDERS.items():
+                    if path.startswith(prefix):
+                        stem = path.rsplit("/", 1)[-1][:-4]
+                        found.setdefault(icon_kind, {})[
+                            norm(stem)
+                        ] = f"{ICON_RAW_BASE}/{path}"
+                        break
+            extra = await self._merge_icon_fallbacks(found)
+            if not found and not extra:
                 return
             self._icons = found
+            self._icons_extra = extra
             self._icons_stamp = time.time()
             self._write_cache(
-                self._icon_file, {"stamp": self._icons_stamp, "data": found}
+                self._icon_file,
+                {
+                    "stamp": self._icons_stamp,
+                    "version": ICON_CACHE_VERSION,
+                    "data": found,
+                    "extra": extra,
+                },
             )
 
+    async def _merge_icon_fallbacks(
+        self, found: Dict[str, Dict[str, str]]
+    ) -> Dict[str, Dict[str, str]]:
+        """Read the second mirror for perks.
+
+        Its files are only consulted when the main tree has nothing for a name, so the
+        primary source stays authoritative.
+        """
+        extra: Dict[str, Dict[str, str]] = {}
+        if not ICON_FALLBACKS:
+            return extra
+        try:
+            listings = await asyncio.gather(
+                *(
+                    self._get_json(f"https://api.github.com/repos/{repo}/contents/")
+                    for repo in ICON_FALLBACKS.values()
+                )
+            )
+        except Exception:  # noqa: BLE001 - icons are optional
+            log.debug("could not read the fallback icon listings", exc_info=True)
+            return extra
+        for index, kind in enumerate(ICON_FALLBACKS.keys()):
+            listing = listings[index]
+            if not isinstance(listing, list):
+                continue
+            pool = extra.setdefault(kind, {})
+            repo = ICON_FALLBACKS[kind]
+            for entry in listing:
+                if not isinstance(entry, dict):
+                    continue
+                filename = str(entry.get("name") or "")
+                if not filename.lower().endswith(".png"):
+                    continue
+                pool.setdefault(
+                    norm(filename.rsplit(".", 1)[0]),
+                    f"https://raw.githubusercontent.com/{repo}/main/{quote(filename)}",
+                )
+        return extra
+
     def _icon_url(self, kind: str, name: str) -> Optional[str]:
-        files = self._icons.get(kind) or {}
-        filename = files.get(norm(name))
-        if not filename:
-            return None
-        return f"https://raw.githubusercontent.com/{ICON_REPOS[kind]}/main/{quote(filename)}"
+        url = resolve_icon(self._icons.get(kind) or {}, name)
+        if url:
+            return url
+        return resolve_icon(self._icons_extra.get(kind) or {}, name)
 
     # ------------------------------------------------------------------ embeds
 
     def _character_embed(self, char: Dict[str, Any]) -> discord.Embed:
-        role_emoji, role_label, colour = role_parts(char.get("role"))
+        role = (char.get("role") or "").lower()
+        role_emoji, role_label, colour = role_parts(role)
         diff_emoji, diff_label = difficulty_parts(char.get("difficulty"))
         embed = discord.Embed(
             title=f"{role_emoji} {char.get('name') or 'Unknown'}",
@@ -363,9 +431,7 @@ class DBD(commands.Cog):
                 inline=False,
             )
 
-        portrait = self._icon_url(
-            "portrait", str(char.get("name") or "").removeprefix("The ").strip()
-        )
+        portrait = self._icon_url(f"portrait_{role}", str(char.get("name") or ""))
         if portrait:
             embed.set_thumbnail(url=portrait)
         embed.set_footer(text="Dead by Daylight · data from dbd.tricky.lol")
@@ -442,6 +508,9 @@ class DBD(commands.Cog):
         role = item.get("role")
         if role:
             embed.add_field(name="Role", value=role_parts(role)[1], inline=True)
+        icon = self._icon_url("item", str(item.get("name") or ""))
+        if icon:
+            embed.set_thumbnail(url=icon)
         embed.set_footer(text="Dead by Daylight · data from dbd.tricky.lol")
         return embed
 
@@ -469,6 +538,9 @@ class DBD(commands.Cog):
             embed.add_field(name="Tags", value=humanize_list(tags), inline=False)
         if offering.get("retired"):
             embed.add_field(name="Retired", value="Yes", inline=True)
+        icon = self._icon_url("offering", str(offering.get("name") or ""))
+        if icon:
+            embed.set_thumbnail(url=icon)
         embed.set_footer(text="Dead by Daylight · data from dbd.tricky.lol")
         return embed
 
@@ -486,6 +558,9 @@ class DBD(commands.Cog):
                 value=str(entry["alias"]).replace("_", " ").title(),
                 inline=True,
             )
+        icon = self._icon_url("map", str(entry.get("name") or ""))
+        if icon:
+            embed.set_thumbnail(url=icon)
         embed.set_footer(text="Dead by Daylight · data from dbd.tricky.lol")
         return embed
 

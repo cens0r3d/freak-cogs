@@ -6,6 +6,7 @@ plain interpreter against the real payloads.
 
 from __future__ import annotations
 
+import difflib
 import html
 import re
 import unicodedata
@@ -283,6 +284,85 @@ def suggest(
 
 def chunk(items: Sequence[Any], size: int) -> List[List[Any]]:
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
+
+
+# ---------------------------------------------------------------------------
+# image naming
+# ---------------------------------------------------------------------------
+
+_INITIAL = re.compile(r"\b[A-Z]\.\s*")
+_POSSESSIVE = re.compile(r"['\u2019]s\b")
+
+
+def icon_keys(name: Optional[str]) -> List[str]:
+    """Candidate normalised file names for an entry.
+
+    The image mirrors name files after the in-game name but with their own quirks: an
+    apostrophe is sometimes kept ("dragonsgrip"), sometimes dropped, middle initials are
+    missing ("leonscottkennedy" vs "Leon S. Kennedy"), nicknames live in quotes
+    ("billoverbeck" vs "William "Bill" Overbeck") and single words are often enough
+    ("tapp" for "Detective Tapp"). Every plausible key is offered here; the caller decides
+    how strict it wants to be.
+    """
+    text = str(name or "")
+    raw: List[str] = [
+        text,
+        text.removeprefix("The "),
+        text.replace("&", "and"),
+        text.replace("&", " "),
+        _POSSESSIVE.sub("s", text),
+        _POSSESSIVE.sub("", text),
+        _INITIAL.sub("", text),
+    ]
+    for quoted in re.findall(r'"([^"]+)"', text):
+        raw.append(quoted)
+    keys: List[str] = []
+    for candidate in raw:
+        key = norm(candidate)
+        if key and key not in keys:
+            keys.append(key)
+    for word in re.findall(r"[^\W_]+(?:[-'\u2019][^\W_]+)*", text):
+        key = norm(word)
+        if len(key) >= 4 and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def resolve_icon(pool: Dict[str, str], name: Optional[str]) -> Optional[str]:
+    """Pick the pool value that belongs to ``name``, or ``None`` when it is unclear.
+
+    Order: exact key, then a key that is an unambiguous part of exactly one pool entry,
+    then a near-identical spelling. Anything ambiguous stays without an image rather than
+    showing the wrong character's face.
+    """
+    keys = icon_keys(name)
+    if not keys:
+        return None
+    for key in keys:
+        hit = pool.get(key)
+        if hit:
+            return hit
+    for key in keys:
+        if len(key) < 4:
+            continue
+        hits = [
+            value
+            for other, value in pool.items()
+            if len(other) >= 4 and (key in other or other in key)
+        ]
+        if len(hits) == 1:
+            return hits[0]
+    best: Optional[Tuple[float, str]] = None
+    for other, value in pool.items():
+        if len(other) < 5:
+            continue
+        for key in keys:
+            if len(key) < 5:
+                continue
+            ratio = difflib.SequenceMatcher(None, key, other).ratio()
+            if ratio >= 0.9 and (best is None or ratio > best[0]):
+                best = (ratio, value)
+    return best[1] if best else None
 
 
 # ---------------------------------------------------------------------------
