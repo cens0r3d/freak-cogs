@@ -50,7 +50,7 @@ from .dbd_data import (
 
 __red_end_user_data_statement__ = "This cog does not store any End User Data."
 
-log = logging.getLogger("red.freak_cogs.dbd")
+log = logging.getLogger("red.freak_cogs.deadbydaylight")
 
 API_BASE = "https://dbd.tricky.lol/api"
 API_SITE = "https://dbd.tricky.lol"

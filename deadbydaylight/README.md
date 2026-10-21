@@ -25,9 +25,13 @@ Everything the bot says is English.
 
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
-[p]cog install freak-cogs dbd
-[p]load dbd
+[p]cog install freak-cogs deadbydaylight
+[p]load deadbydaylight
 ```
+
+The **cog folder is called `deadbydaylight`**, the command is `[p]dbd` (alias
+`[p]deadbydaylight`). Red names the extension after the folder, so `[p]cog install` and
+`[p]load` want `deadbydaylight`.
 
 No requirements beyond Red itself — the cog uses `aiohttp`, which ships with Red.
 

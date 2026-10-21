@@ -1,4 +1,4 @@
-from .dbd import DBD
+from .deadbydaylight import DBD
 
 
 async def setup(bot):

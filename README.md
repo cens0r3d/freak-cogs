@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs dbd psychonaut
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs deadbydaylight psychonaut
 ```
 
 Or install one at a time:
@@ -21,7 +21,7 @@ Or install one at a time:
 [p]cog install freak-cogs osint
 [p]cog install freak-cogs idlerpg
 [p]cog install freak-cogs discogs
-[p]cog install freak-cogs dbd
+[p]cog install freak-cogs deadbydaylight
 [p]cog install freak-cogs psychonaut
 ```
 
@@ -393,6 +393,9 @@ Notes:
 Dead by Daylight information: killers with move speed and terror radius, survivors, perks
 with all three tier values resolved, items, offerings and maps.
 
+The cog folder is called **`deadbydaylight`** (`[p]cog install freak-cogs deadbydaylight`,
+`[p]load deadbydaylight`), the command is `[p]dbd`.
+
 ```
 [p]dbd killer nurse
 [p]dbd survivor dwight
@@ -446,7 +449,7 @@ Notes:
   never tracebacks.
 - **No requirements** — `aiohttp` ships with Red. Nothing is stored per user, so the cog has
   no data-deletion surface.
-- Full manual: [`dbd/README.md`](dbd/README.md).
+- Full manual: [`deadbydaylight/README.md`](deadbydaylight/README.md).
 
 ### psychonaut
 
