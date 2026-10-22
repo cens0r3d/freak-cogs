@@ -285,10 +285,8 @@ def _summary_pairs(summary: StreamSummary) -> List[Tuple[str, str]]:
     return pairs
 
 
-def _summary_footer(label: str, summary: StreamSummary) -> str:
-    """Footer text, stating how many viewer samples the numbers are based on."""
-    if summary.samples:
-        return f"Kick.com | {label} · {summary.samples} checks"
+def _summary_footer(label: str) -> str:
+    """Footer text for an end-of-stream embed."""
     return f"Kick.com | {label}"
 
 
@@ -759,7 +757,7 @@ def build_offline_embed(
         embed.add_field(name=name, value=value, inline=True)
     if info.banner:
         embed.set_thumbnail(url=info.banner)
-    embed.set_footer(text=_summary_footer("Stream ended", summary))
+    embed.set_footer(text=_summary_footer("Stream ended"))
     return embed
 
 
@@ -785,7 +783,7 @@ def build_summary_embed(
         embed.add_field(name=name, value=value, inline=True)
     if info.banner:
         embed.set_thumbnail(url=info.banner)
-    embed.set_footer(text=_summary_footer("Stream summary", summary))
+    embed.set_footer(text=_summary_footer("Stream summary"))
     return embed
 
 
@@ -874,7 +872,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.2.0"
+    __version__ = "3.2.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot

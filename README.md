@@ -106,7 +106,7 @@ Everything except `setcreds` needs **Manage Server**.
 Notes:
 
 - A stream is identified by its start time, so a restart of the bot, a long poll interval or a flapping API never double-posts an alert — only a genuinely new stream announces again.
-- The end-of-stream summary counts viewers on every poll, so the average is the mean of those samples and the peak is the highest one seen; the footer states how many samples the numbers are based on. A stream that ends within one poll interval has a stream time but no viewer statistics. The counters reset with every new broadcast.
+- The end-of-stream summary counts viewers on every poll, so the average is the mean of those samples and the peak is the highest one seen. A stream that ends within one poll interval has a stream time but no viewer statistics. The counters reset with every new broadcast.
 - Credentials set with `[p]set api kick …` take effect immediately, without a reload. If none are stored yet, `[p]kickalert authstatus` offers Red's owner-only form so they never have to appear in chat.
 - The poll loop backs off on rate limits (HTTP 429) and API errors and never dies from them. If the alert channel is gone or the bot lacks **Send Messages** / **Embed Links** there, the alert is skipped and retried on the next tick, so nothing is lost while permissions are fixed.
 - Deleting the alerts channel while it is configured clears the reference automatically.
