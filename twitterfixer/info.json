@@ -1,0 +1,31 @@
+{
+    "author": [
+        "tombly (original)",
+        "cens0r3d"
+    ],
+    "install_msg": "Thanks for installing TwitterFixer.\n\nThis is a fork. The original cog was published by tombly and its repository has since been deleted; this copy is archived here so the code is not lost. Nothing but this metadata file changed.\n\nSetup: ffmpeg must be installed on the bot host (apt install ffmpeg), otherwise re-encoding fails.\n\nUsage: no commands — the cog listens for Twitter/X links and replaces them with a vxtwitter embed.\n\nPermissions: manage messages (to delete its own embeds) and embed links.",
+    "name": "TwitterFixer",
+    "short": "Fork: rewrites Twitter/X links into vxtwitter embeds.",
+    "description": "Archived fork of a deleted cog. Picks up Twitter and X links in messages, pulls the post metadata from the vxtwitter API and builds an embed with text, author, date, likes, retweets and replies. Video and GIF media is re-encoded with ffmpeg; when the result exceeds the upload limit the cog posts a vxtwitter link instead.",
+    "end_user_data_statement": "This cog does not collect or persist data about Discord users. Links and post metadata are sent to api.vxtwitter.com; downloaded media is only kept temporarily in the cog's data directory.",
+    "requirements": [
+        "ffmpy"
+    ],
+    "tags": [
+        "twitter",
+        "x",
+        "embed",
+        "vxtwitter",
+        "media",
+        "fork"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}

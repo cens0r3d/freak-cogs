@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs deadbydaylight psychonaut
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs deadbydaylight psychonaut sherlockosint twitterfixer
 ```
 
 Or install one at a time:
@@ -23,6 +23,8 @@ Or install one at a time:
 [p]cog install freak-cogs discogs
 [p]cog install freak-cogs deadbydaylight
 [p]cog install freak-cogs psychonaut
+[p]cog install freak-cogs sherlockosint
+[p]cog install freak-cogs twitterfixer
 ```
 
 ## Cogs
@@ -495,6 +497,67 @@ Notes:
   every dosing embed says so; the cog never advises a dose.
 - **No requirements** — `aiohttp` ships with Red, no key, no login, nothing stored per user.
 - Full manual: [`psychonaut/README.md`](psychonaut/README.md).
+### sherlockosint
+
+> **Fork / archive.** The original shipped without a real author name (`YourName`
+> was never replaced) and its repository is gone. Archived here unchanged apart from
+> the command alias and the metadata.
+
+Username lookup across the site list of the
+[Sherlock project](https://github.com/sherlock-project/sherlock). Hits are rendered
+as paginated embeds.
+
+```
+[p]sherlock search torvalds
+[p]sherlock quick torvalds
+[p]sherlock site GitHub torvalds
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]sherlock search <username>` | Full search with live progress (aliases: `find`, `lookup`) |
+| `[p]sherlock quick <username>` | One-shot search, found accounts only |
+| `[p]sherlock site <site> <username>` | Check a single site |
+| `[p]sherlock sites` | Loaded site count and a sample |
+| `[p]sherlock reload` | Re-fetch the dataset |
+| `[p]sherlock settings` | Current server configuration |
+| `[p]sherlock set <key> <value>` | `enabled`, `cooldown` (0–300 s), `timeout` (3–30 s), `results_per_page`, `show_not_found`, `nsfw_filter` |
+| `[p]sherlock addchannel\|removechannel\|clearchannels` | Channel whitelist |
+
+Notes:
+
+- The group alias is **`[p]sk`**. The original used `osint`, which collides with the
+  `osint` cog in this repo — two cogs answering to the same command name means the
+  second one refuses to load.
+- The site list comes from `raw.githubusercontent.com/sherlock-project/sherlock` and
+  is cached in memory; `[p]sherlock reload` fetches it again.
+- Every check is a plain request to `https://<site>/<username>` from the bot host, so
+  that IP is visible to the sites. Nothing is brute-forced.
+- **No requirements** — `aiohttp` ships with Red.
+- Full manual: [`sherlockosint/README.md`](sherlockosint/README.md).
+
+### twitterfixer
+
+> **Fork / archive.** Original by **tombly**; that repository has been deleted.
+> Archived here so the code is not lost — only `info.json` was rewritten.
+
+Turns Twitter and X links into embeds built from the vxtwitter API, with text,
+author, date, likes, retweets and replies. Videos and GIFs are re-encoded with
+ffmpeg; if the result is too large for the server, the message is replaced by a
+`vxtwitter.com` link instead.
+
+There are **no commands** — the cog is a listener. It skips bots, DMs and members
+without *Embed Links*, and needs *Manage Messages* to delete its own placeholder.
+
+Notes:
+
+- Needs `ffmpeg` on the host (`apt install ffmpeg`) and the `ffmpy` package, which
+  `[p]cog install` pulls in.
+- Metadata comes from `api.vxtwitter.com`; nothing is stored on disk beyond
+  temporarily downloaded media.
+- The original repository carried no licence file. This mirror only preserves the
+  code; rights stay with the original author.
+- Full manual: [`twitterfixer/README.md`](twitterfixer/README.md).
 
 ## Extra setup
 
@@ -508,6 +571,8 @@ Notes:
 - **idlerpg** — nothing to install. The bot needs **Send Messages** and **Embed Links** in the announcement channel; `[p]irpg set role` additionally needs **Manage Roles**, with the bot's role above the one it hands out.
 - **discogs** — nothing to install or configure. Optionally store a user token for a higher rate limit (see above). Data comes from api.discogs.com; the requests carry a `freak-cogs-discogs` user agent and the bot host's IP.
 - **naminter** — nothing to configure, but `[p]cog install` pulls the `naminter` package (curl-cffi, orjson, jsonschema plus the upstream CLI extras: rich, uvloop, weasyprint), so the install step takes noticeably longer than the other cogs. Python 3.11 or newer is required, and the host needs outbound HTTPS to `raw.githubusercontent.com` and to the sites being checked.
+- **sherlockosint** — nothing to install. Needs outbound HTTPS to `raw.githubusercontent.com` (site list) and to the sites being queried. The bot needs **Embed Links** in the channels where results are posted.
+- **twitterfixer** — needs **ffmpeg** on the host for video and GIF re-encoding, and the **Manage Messages** permission so it can delete its own placeholder embed. Without *Manage Messages* the cog stays silent by design.
 
 ## Requirements
 
@@ -516,6 +581,8 @@ Red-DiscordBot 3.5.0+ and discord.py 2.x. **naminter** additionally needs Python
 ## Credits
 
 - **DeepSeek** (`deepseek-v4.1-flash`) — pair-programmed the cogs.
+- **tombly** — original author of TwitterFixer (repository deleted, archived here).
+- **unnamed** — original author of SherlockOSINT (shipped without a real author name, repository gone).
 
 ## License
 

@@ -1,0 +1,29 @@
+{
+    "author": [
+        "YourName (original)",
+        "cens0r3d"
+    ],
+    "install_msg": "Thanks for installing SherlockOSINT.\n\nThis is a fork. The original cog shipped without a real author name (the placeholder \"YourName\" was never replaced) and its source repository is gone, so this copy is archived here to keep the code alive. Nothing but the command alias and the metadata changed.\n\nSetup: nothing required — the site list is fetched from the Sherlock project.\n\nUsage: `[p]sherlock search <username>` for the full search, `[p]sherlock quick <username>` for a one-shot answer, `[p]sherlock sites` to see what got loaded.\n\nThe `osint` alias was dropped because it collides with the osint cog in this repo — use `[p]sk` instead.\n\nDependencies: none, aiohttp ships with Red.",
+    "name": "SherlockOSINT",
+    "short": "Fork: searches hundreds of sites for a username using the Sherlock dataset.",
+    "description": "Archived fork of an uncredited cog. Looks a username up across the site list published by the Sherlock project and renders hits as paginated embeds. Ships a full search, a per-site check, a site overview, a per-user cooldown, a channel whitelist and a configurable page size.",
+    "end_user_data_statement": "This cog stores guild configuration only (enabled flag, cooldown, timeout, results per page, NSFW filter, allowed channel IDs) through Red's Config. Search targets and their results are never written to disk. The site list is cached in memory and reloaded on restart.",
+    "requirements": [],
+    "tags": [
+        "osint",
+        "sherlock",
+        "username",
+        "lookup",
+        "recon",
+        "fork"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
