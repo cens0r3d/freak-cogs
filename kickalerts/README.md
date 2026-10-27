@@ -59,11 +59,9 @@ still goes through the official API.
 Kick serves clips **only as HLS playlists** (`clips.kick.com/.../playlist.m3u8`,
 segments are `.ts`); there is no direct MP4 - `video.mp4`, `clip.mp4` and
 `source.mp4` all answer 403. With `[p]kickalert clipfiles true` (default on) the
-cog therefore runs `ffmpeg -c copy` on the playlist and sends the MP4 **in the
-same message as the embed**, so Discord renders its player (and download button)
-directly under the embed. Discord cannot play anything *inside* the embed frame -
-`embed.video` only works for the providers it recognises, and `attachment://`
-references are images only. Measured: a 10 s clip becomes 3.0 MB, a 45 s clip 9.5 MB (h264 720p,
+cog therefore runs `ffmpeg -c copy` on the playlist and posts the resulting MP4
+under the announcement, so Discord renders the video with its own download
+button. Measured: a 10 s clip becomes 3.0 MB, a 45 s clip 9.5 MB (h264 720p,
 ~2.3 Mbit/s).
 
 - `[p]kickalert clipmax <1-25>` - size ceiling per file, default 20 MB. Checked

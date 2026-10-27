@@ -1380,21 +1380,14 @@ class KickAlerts(commands.Cog):
         announced = 0
         # Oldest first, so a backlog reads in the order it was clipped.
         for clip in reversed(fresh):
-            # The file goes into the *same* message as the embed: Discord then
-            # renders its player directly under the embed instead of one message
-            # later. A conversion failure just means an embed-only message.
-            attachment = None
-            if announce_file:
-                attachment = await self._clip_file(guild, channel, clip, max_mb)
-            payload: Dict[str, Any] = {"embed": build_clip_embed(clip, settings)}
-            if attachment is not None:
-                payload["file"] = attachment
             try:
-                await channel.send(**payload)
+                await channel.send(embed=build_clip_embed(clip, settings))
                 announced += 1
             except discord.HTTPException:
                 log.exception("KickAlerts: could not post the clip %s", clip.id)
                 break
+            if announce_file:
+                await self._send_clip_file(guild, channel, clip, max_mb)
         await self._remember_clips(guild, slug, clips)
         if announced:
             log.info("KickAlerts: announced %s clip(s) for %s", announced, slug)
@@ -1419,19 +1412,14 @@ class KickAlerts(commands.Cog):
             entry["seen_clips"] = merged[:SEEN_CLIP_LIMIT]
             entry["clips_primed"] = True
 
-    async def _clip_file(
+    async def _send_clip_file(
         self,
         guild: discord.Guild,
         channel: discord.TextChannel,
         clip: ClipInfo,
         max_mb: int,
-    ) -> Optional[discord.File]:
-        """Convert the clip to an MP4 and wrap it as a Discord attachment.
-
-        Returns ``None`` whenever the file cannot be produced - no Attach Files
-        permission, a missing ffmpeg, a broken playlist, a timeout or a size
-        overrun - so the caller can still post the embed.
-        """
+    ) -> None:
+        """Convert the clip to an MP4 and post it under the embed."""
         guild_limit = _as_int(getattr(guild, "filesize_limit", None))
         limit = min(max_mb * 1024 * 1024, guild_limit or max_mb * 1024 * 1024)
         permissions = channel.permissions_for(guild.me)
@@ -1440,18 +1428,23 @@ class KickAlerts(commands.Cog):
                 "KickAlerts: missing Attach Files in #%s, not posting the clip",
                 channel,
             )
-            return None
+            return
         async with self._clip_lock:
             try:
-                clip_bytes = await self.api.download_clip(clip.video_url, limit)
+                data = await self.api.download_clip(clip.video_url, limit)
             except KickError as exc:
                 log.warning("KickAlerts: clip conversion unavailable: %s", exc)
-                return None
-        if not clip_bytes:
-            return None
-        return discord.File(
-            io.BytesIO(clip_bytes), filename=f"{clip.slug}_{clip.id}.mp4"
-        )
+                return
+        if not data:
+            return
+        filename = f"{clip.slug}_{clip.id}.mp4"
+        try:
+            await channel.send(
+                file=discord.File(io.BytesIO(data), filename=filename),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("KickAlerts: could not upload the clip %s", clip.id)
 
     async def _check_all_guilds(self) -> Dict[str, int]:
         """One polling pass: fetch every watched slug and update every guild."""
