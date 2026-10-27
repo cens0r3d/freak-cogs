@@ -105,6 +105,8 @@ ACCOUNT_DEFAULTS: Dict[str, Any] = {
     "missing": False,
     "is_live": False,
     "stream_id": None,
+    "stream_key": None,
+    "announced_at": None,
     "room_id": None,
     "started_at": None,
     "last_title": None,
@@ -306,6 +308,24 @@ class LiveInfo:
     def url(self) -> str:
         """The public live URL of the handle."""
         return LIVE_URL.format(handle=self.handle)
+
+    @property
+    def stream_key(self) -> Optional[str]:
+        """A key that identifies this broadcast, from whatever TikTok sent.
+
+        Not every live room carries ``streamId``: some payloads ship a sparse
+        ``liveRoom`` with only the viewer count, and a missing id used to look
+        like a brand-new broadcast on every poll - one alert per interval. The
+        start time and the current room id are equally per-broadcast, so the key
+        falls back through them.
+        """
+        if self.stream_id:
+            return f"stream:{self.stream_id}"
+        if self.started_at is not None:
+            return f"start:{int(self.started_at.timestamp())}"
+        if self.room_id:
+            return f"room:{self.room_id}"
+        return None
 
     @property
     def uptime(self) -> Optional[timedelta]:
@@ -719,7 +739,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.1"
+    __version__ = "1.0.2"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1036,6 +1056,7 @@ class TikTokWatch(commands.Cog):
                 handle,
                 is_live=info.is_live,
                 stream_id=info.stream_id,
+                stream_key=info.stream_key,
                 room_id=info.room_id,
                 last_title=info.title,
             )
@@ -1044,10 +1065,19 @@ class TikTokWatch(commands.Cog):
         if channel is None:
             return "no-channel"
         was_live = bool(state.get("is_live"))
-        same_stream = info.stream_id is not None and info.stream_id == state.get(
-            "stream_id"
-        )
-        if info.is_live and not (was_live and same_stream):
+        stored_key = state.get("stream_key")
+        current_key = info.stream_key
+        new_broadcast = False
+        if info.is_live:
+            if not was_live:
+                new_broadcast = True
+            elif stored_key is None:
+                # Either state written before stream keys existed, or a room
+                # that hides its ids: remember the key, do not post twice.
+                await self._store_account(guild, handle, stream_key=current_key)
+            elif current_key is not None and current_key != stored_key:
+                new_broadcast = True  # a genuine restart of the stream
+        if info.is_live and new_broadcast:
             delivered = await self._announce_live(
                 guild, handle, info, settings, channel, state, data
             )
@@ -1265,7 +1295,9 @@ class TikTokWatch(commands.Cog):
             handle,
             is_live=True,
             stream_id=info.stream_id,
+            stream_key=info.stream_key,
             room_id=info.room_id,
+            announced_at=time.time(),
             started_at=info.started_at.isoformat() if info.started_at else None,
             alert_message_id=message.id,
             last_edit=time.time(),
@@ -1335,6 +1367,13 @@ class TikTokWatch(commands.Cog):
         if state.get("started_at"):
             with contextlib.suppress(ValueError):
                 started = datetime.fromisoformat(str(state["started_at"]))
+        if started is None and state.get("announced_at"):
+            # Rooms without a startTime: the moment we announced is the closest
+            # thing to a stream start that exists.
+            with contextlib.suppress(TypeError, ValueError, OverflowError):
+                started = datetime.fromtimestamp(
+                    float(state["announced_at"]), tz=timezone.utc
+                )
         duration = None
         if started is not None:
             duration = datetime.now(timezone.utc) - started
@@ -1370,6 +1409,8 @@ class TikTokWatch(commands.Cog):
             handle,
             is_live=False,
             stream_id=None,
+            stream_key=None,
+            announced_at=None,
             started_at=None,
             alert_message_id=None,
             last_edit=None,

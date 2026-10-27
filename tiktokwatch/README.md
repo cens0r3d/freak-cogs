@@ -62,6 +62,13 @@ An unknown handle answers `statusCode 19881007` on the live endpoint and HTTP
 400 on the embed page; both are reported as "no such account" instead of looking
 like a permanently offline creator.
 
+**A broadcast is identified by a key, not by one field.** The key is built from
+`streamId`, then the stream's start time, then TikTok's room id. Not every live
+room carries a `streamId`: some payloads ship a sparse room with only the viewer
+count, and checking the id alone would treat that as a brand-new broadcast on
+every poll — one alert per interval. A creator genuinely restarting is a new key
+and announces again; an unknown key never re-announces on its own.
+
 **New clips are detected by id, never by position.** The `videoList` array starts
 with the profile's *pinned* clip, which can be months old — announcing index 0
 would repost an old video on every poll. Each account keeps the last 30 ids.
@@ -93,7 +100,7 @@ and a signing service, not these endpoints).
 | "no-channel", no alerts | The account's channel was deleted or never set: `[p]tiktok setchannel <handle> <#channel>` |
 | "handle not found" in `list` | Typo, or the account cannot go live. Re-add it with the exact handle from the profile URL |
 | Nothing posted, `settings` shows a back-off | TikTok is rate limiting; wait it out or raise the intervals |
-| Live alert appears twice | The creator restarted the stream between two polls — a new `streamId` counts as a new broadcast |
+| Live alert appears twice | The creator really restarted the stream (a new broadcast key counts as new), or the account sits in two guilds |
 | A clip was never announced | The first scan is silent by design; the clip list was primed at `add` time |
 | Alerts work but no ping | `[p]tiktok setrole <handle> @role`; the bot needs Mention @everyone for the default role |
 
