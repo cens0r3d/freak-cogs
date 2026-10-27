@@ -36,6 +36,18 @@ log = logging.getLogger("red.freak_cogs.kickalerts")
 KICK_AUTH_URL = "https://id.kick.com/oauth/token"
 KICK_CHANNELS_URL = "https://api.kick.com/public/v1/channels"
 KICK_SITE = "https://kick.com"
+#: Web endpoint for a channel's clips. Keyless, unlike the public API, which
+#: exposes no clip list at all.
+KICK_CLIPS_URL = "https://kick.com/api/v2/channels/{slug}/clips"
+#: kick.com answers a plain HTTP client; this is just enough of a browser.
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+#: Clip poll interval bounds and how many clip ids are remembered per streamer.
+MIN_CLIPS_INTERVAL = 60
+MAX_CLIPS_INTERVAL = 3600
+SEEN_CLIP_LIMIT = 30
 KICK_COLOR = 0x53FC18
 OFFLINE_COLOR = 0x808080
 DEBUG_COLOR = 0xFFAA00
@@ -84,6 +96,9 @@ DEFAULT_GUILD: Dict[str, Any] = {
     "enabled": True,
     "edit_live_alerts": True,
     "live_update_seconds": 300,
+    "clips_enabled": False,
+    "clips_interval": 300,
+    "clips_channel_id": None,
 }
 
 #: Keys every streamer entry carries; missing ones fall back to these.
@@ -104,6 +119,10 @@ STREAMER_DEFAULTS: Dict[str, Any] = {
     "viewer_total": 0,
     "peak_viewers": 0,
     "last_viewers": 0,
+    "clips": True,
+    "seen_clips": [],
+    "clips_primed": False,
+    "clip_message_id": None,
 }
 
 SLUG_RE = re.compile(r"^[a-z0-9_-]{1,25}$")
@@ -431,6 +450,14 @@ def _clamp_interval(seconds: Any) -> int:
     return max(MIN_INTERVAL, min(MAX_INTERVAL, value))
 
 
+def _clamp_clips_interval(seconds: Any) -> int:
+    """Clamp a stored clip poll interval into ``[MIN, MAX]_CLIPS_INTERVAL``."""
+    value = _as_int(seconds)
+    if value is None:
+        return int(DEFAULT_GUILD["clips_interval"])
+    return max(MIN_CLIPS_INTERVAL, min(MAX_CLIPS_INTERVAL, value))
+
+
 def _clamp_update_seconds(seconds: Any) -> int:
     """Clamp the live-embed refresh interval (60s .. 3600s)."""
     value = _as_int(seconds) or DEFAULT_GUILD["live_update_seconds"]
@@ -656,6 +683,100 @@ class KickAPI:
             return None
         return (await self.get_channels([cleaned])).get(cleaned)
 
+    async def get_clips(self, slug: str, limit: int = 10) -> List[ClipInfo]:
+        """The newest clips of one channel, from Kick's web endpoint.
+
+        The public API exposes no clip list, so this is the one request in the
+        cog that does not go through ``api.kick.com`` - and it needs no token,
+        which means clip alerts keep working when the credentials are missing.
+        The endpoint ignores ``limit`` and answers with its own page (20 clips),
+        so the caller compares ids instead of relying on a slice.
+        """
+        cleaned = _clean_slug(slug)
+        if not cleaned:
+            return []
+        url = KICK_CLIPS_URL.format(slug=cleaned)
+        status, payload = await self._http_json(
+            "GET",
+            url,
+            params=(("limit", str(max(1, min(50, limit)))),),
+            headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+        )
+        if status == 429:
+            raise KickRateLimited("kick.com is rate limiting the clip endpoint")
+        if status != 200:
+            raise KickError(f"kick.com answered HTTP {status} for {cleaned}'s clips")
+        return parse_clips(cleaned, payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ClipInfo:
+    """One clip from a channel's clip list."""
+
+    id: str
+    slug: str
+    title: Optional[str] = None
+    thumbnail: Optional[str] = None
+    duration: Optional[int] = None
+    views: Optional[int] = None
+    likes: Optional[int] = None
+    creator: Optional[str] = None
+    category: Optional[str] = None
+    created_at: Optional[datetime] = None
+    mature: bool = False
+
+    @property
+    def url(self) -> str:
+        """The public page of this clip."""
+        return f"{KICK_SITE}/{self.slug}/clips/{self.id}"
+
+
+def parse_clips(slug: str, payload: Any) -> List[ClipInfo]:
+    """Turn a ``/api/v2/channels/<slug>/clips`` answer into :class:`ClipInfo`.
+
+    The endpoint returns the newest clips first; private clips are dropped so a
+    hidden clip is never announced.
+    """
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("clips")
+    if not isinstance(raw, list):
+        return []
+    clips: List[ClipInfo] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        clip_id = _as_text(item.get("id"))
+        if not clip_id:
+            continue
+        privacy = (_as_text(item.get("privacy")) or "public").lower()
+        if privacy != "public":
+            continue
+        creator = _as_dict(item.get("creator"))
+        category = _as_dict(item.get("category"))
+        views = _as_int(item.get("view_count"))
+        if views is None:
+            views = _as_int(item.get("views"))
+        likes = _as_int(item.get("likes_count"))
+        if likes is None:
+            likes = _as_int(item.get("likes"))
+        clips.append(
+            ClipInfo(
+                id=clip_id,
+                slug=slug,
+                title=_as_text(item.get("title")),
+                thumbnail=_as_text(item.get("thumbnail_url")),
+                duration=_as_int(item.get("duration")),
+                views=views,
+                likes=likes,
+                creator=_as_text(creator.get("username")),
+                category=_as_text(category.get("name")),
+                created_at=parse_kick_time(item.get("created_at")),
+                mature=bool(item.get("is_mature")),
+            )
+        )
+    return clips
+
 
 # --------------------------------------------------------------------------- #
 # embeds
@@ -787,6 +908,40 @@ def build_summary_embed(
     return embed
 
 
+def build_clip_embed(clip: ClipInfo, settings: EmbedSettings) -> discord.Embed:
+    """The "new clip" announcement embed."""
+    embed = discord.Embed(
+        colour=discord.Colour(KICK_COLOR),
+        title=clip.title or "New clip on Kick",
+        url=clip.url,
+        timestamp=datetime.now(settings.tz),
+    )
+    embed.set_author(name=f"New clip from {clip.slug} on Kick", url=clip.url)
+    lines: List[str] = []
+    if settings.show_category and clip.category:
+        lines.append(f"**Category:** {clip.category}")
+    if settings.show_viewers and clip.views is not None:
+        lines.append(f"**Views:** {clip.views:,}")
+    if clip.creator:
+        lines.append(f"**Clipped by:** {clip.creator}")
+    if clip.duration:
+        length = format_uptime(timedelta(seconds=clip.duration))
+        if length:
+            lines.append(f"**Length:** {length}")
+    created = _stamp(clip.created_at)
+    if created:
+        lines.append(f"**Created:** {created}")
+    if clip.mature:
+        lines.append("**18+ mature content**")
+    lines.append("")
+    lines.append(f"**[Watch the clip on Kick]({clip.url})**")
+    embed.description = "\n".join(lines)
+    if clip.thumbnail:
+        embed.set_image(url=clip.thumbnail)
+    embed.set_footer(text="Kick.com | New clip")
+    return embed
+
+
 def build_status_embed(info: StreamInfo, settings: EmbedSettings) -> discord.Embed:
     """The embed used by ``[p]kickalert check``."""
     if info.is_live:
@@ -872,7 +1027,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.2.1"
+    __version__ = "3.3.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -883,23 +1038,35 @@ class KickAlerts(commands.Cog):
         self.config.register_guild(**DEFAULT_GUILD)
         self.api = KickAPI()
         self._watch_task: Optional[asyncio.Task] = None
+        self._clips_task: Optional[asyncio.Task] = None
         self._last_poll: Optional[datetime] = None
         self._last_result: Dict[str, int] = {}
 
     # -- lifecycle ---------------------------------------------------------- #
     async def cog_load(self) -> None:
-        """Load credentials, migrate legacy ones and start the watcher."""
+        """Load credentials, migrate legacy ones and start both watchers."""
         await self._load_credentials(migrate=True)
         self._watch_task = asyncio.create_task(self._watch_loop())
+        self._clips_task = asyncio.create_task(self._clips_loop())
 
-    async def cog_unload(self) -> None:
-        """Stop the watcher and close the HTTP session."""
-        if self._watch_task is not None:
-            self._watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._watch_task
-            self._watch_task = None
-        await self.api.close()
+    def cog_unload(self) -> None:
+        """Stop both watchers and close the HTTP session.
+
+        Red never awaits ``cog_unload``, so this must be synchronous: an
+        ``async def`` here leaves the loops running after an unload and leaks the
+        session on every reload.
+        """
+        for task in (self._watch_task, self._clips_task):
+            if task is not None:
+                task.cancel()
+        self._watch_task = None
+        self._clips_task = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.create_task(self.api.close())
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
         """Nothing is stored per user — everything here is guild level."""
@@ -983,6 +1150,177 @@ class KickAlerts(commands.Cog):
             if data.get("streamers") and data.get("enabled", True)
         ]
         return min(intervals) if intervals else DEFAULT_GUILD["check_interval"]
+
+    # -- clip polling -------------------------------------------------------- #
+    async def _clips_loop(self) -> None:
+        """Poll every watched channel's clip list forever."""
+        await self.bot.wait_until_ready()
+        while True:
+            delay = float(DEFAULT_GUILD["clips_interval"])
+            try:
+                delay = float(await self._clips_interval())
+                await self._check_all_clips()
+            except asyncio.CancelledError:
+                raise
+            except KickRateLimited as exc:
+                log.warning("KickAlerts: clips: %s", exc)
+                delay = max(delay, 300.0)
+            except KickError as exc:
+                log.warning("KickAlerts: clips: %s", exc)
+                delay = max(delay, 120.0)
+            except Exception:  # noqa: BLE001 - a poll must never kill the loop
+                log.exception("KickAlerts: unexpected error while polling clips")
+                delay = max(delay, 300.0)
+            await asyncio.sleep(delay * random.uniform(0.95, 1.05))
+
+    async def _clips_interval(self) -> int:
+        """The shortest clip interval any guild asked for."""
+        guilds = await self.config.all_guilds()
+        values = [
+            _clamp_clips_interval(data.get("clips_interval"))
+            for data in guilds.values()
+            if data.get("clips_enabled")
+            and data.get("streamers")
+            and data.get("enabled", True)
+        ]
+        return min(values) if values else int(DEFAULT_GUILD["clips_interval"])
+
+    async def _check_all_clips(self) -> Dict[str, int]:
+        """One clip pass: fetch every watched channel, then announce per guild."""
+        guilds = await self.config.all_guilds()
+        watched = {
+            guild_id: data
+            for guild_id, data in guilds.items()
+            if data.get("clips_enabled")
+            and data.get("streamers")
+            and data.get("enabled", True)
+        }
+        result = {"guilds": len(watched), "channels": 0, "clips": 0}
+        if not watched:
+            return result
+        slugs = sorted(
+            {slug for data in watched.values() for slug in data["streamers"]}
+        )
+        result["channels"] = len(slugs)
+        clips: Dict[str, List[ClipInfo]] = {}
+        for slug in slugs:
+            try:
+                clips[slug] = await self.api.get_clips(slug, 10)
+            except KickRateLimited:
+                raise
+            except KickError as exc:
+                log.debug("KickAlerts: no clip list for %s: %s", slug, exc)
+            # kick.com is a web host, not the API: keep the sweep gentle.
+            await asyncio.sleep(0.3)
+        for guild_id, data in watched.items():
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            if await self.bot.cog_disabled_in_guild(self, guild):
+                continue
+            try:
+                result["clips"] += await self._poll_guild_clips(guild, data, clips)
+            except Exception:  # noqa: BLE001 - one guild must not stop the sweep
+                log.exception("KickAlerts: clip pass for guild %s failed", guild_id)
+        return result
+
+    async def _poll_guild_clips(
+        self,
+        guild: discord.Guild,
+        data: Dict[str, Any],
+        clips: Dict[str, List[ClipInfo]],
+    ) -> int:
+        """Announce new clips of one guild's streamers and return the count."""
+        settings = EmbedSettings.from_guild_config(data)
+        announced = 0
+        for slug, entry in (data.get("streamers") or {}).items():
+            if slug not in clips:
+                continue
+            state = {**STREAMER_DEFAULTS, **(entry or {})}
+            if not state.get("clips", True) or state.get("muted"):
+                # Keep the list current so unmuting does not dump a backlog.
+                await self._remember_clips(guild, slug, clips[slug])
+                continue
+            channel = self._resolve_clips_channel(guild, data, state)
+            if channel is None:
+                continue
+            announced += await self._handle_clips(
+                guild, slug, state, clips[slug], channel, settings
+            )
+        return announced
+
+    def _resolve_clips_channel(
+        self,
+        guild: discord.Guild,
+        data: Dict[str, Any],
+        state: Dict[str, Any],
+    ) -> Optional[discord.TextChannel]:
+        """Clip channel: guild setting, then the streamer's own, then the default."""
+        for channel_id in (
+            data.get("clips_channel_id"),
+            state.get("channel_id"),
+            data.get("global_channel_id"),
+        ):
+            if not channel_id:
+                continue
+            channel = guild.get_channel(int(channel_id))
+            if isinstance(channel, discord.TextChannel):
+                return channel
+        return None
+
+    async def _handle_clips(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        state: Dict[str, Any],
+        clips: List[ClipInfo],
+        channel: discord.TextChannel,
+        settings: EmbedSettings,
+    ) -> int:
+        """Post the clips that were not seen before."""
+        seen = {str(item) for item in (state.get("seen_clips") or [])}
+        if not state.get("clips_primed"):
+            # The first scan records the list: a fresh install must not dump
+            # every clip the channel ever had.
+            await self._remember_clips(guild, slug, clips)
+            return 0
+        fresh = [clip for clip in clips if clip.id not in seen]
+        if not fresh:
+            return 0
+        if not self._can_post(guild, channel, slug):
+            return 0
+        announced = 0
+        # Oldest first, so a backlog reads in the order it was clipped.
+        for clip in reversed(fresh):
+            try:
+                await channel.send(embed=build_clip_embed(clip, settings))
+                announced += 1
+            except discord.HTTPException:
+                log.exception("KickAlerts: could not post the clip %s", clip.id)
+                break
+        await self._remember_clips(guild, slug, clips)
+        if announced:
+            log.info("KickAlerts: announced %s clip(s) for %s", announced, slug)
+        return announced
+
+    async def _remember_clips(
+        self, guild: discord.Guild, slug: str, clips: List[ClipInfo]
+    ) -> None:
+        """Merge the current clip ids into the streamer's seen list."""
+        async with self.config.guild(guild).streamers() as streamers:
+            entry = streamers.get(slug)
+            if not isinstance(entry, dict):
+                return
+            known = [str(item) for item in (entry.get("seen_clips") or [])]
+            merged: List[str] = []
+            for clip in clips:
+                if clip.id not in merged:
+                    merged.append(clip.id)
+            for clip_id in known:
+                if clip_id not in merged:
+                    merged.append(clip_id)
+            entry["seen_clips"] = merged[:SEEN_CLIP_LIMIT]
+            entry["clips_primed"] = True
 
     async def _check_all_guilds(self) -> Dict[str, int]:
         """One polling pass: fetch every watched slug and update every guild."""
@@ -1287,7 +1625,9 @@ class KickAlerts(commands.Cog):
         if offline_post == "new":
             if self._can_post(guild, channel, slug):
                 try:
-                    await channel.send(embed=build_summary_embed(info, settings, summary))
+                    await channel.send(
+                        embed=build_summary_embed(info, settings, summary)
+                    )
                 except discord.HTTPException:
                     log.exception(
                         "KickAlerts: could not post the stream summary for %s", slug
@@ -1666,6 +2006,112 @@ class KickAlerts(commands.Cog):
         await self.config.guild(ctx.guild).check_interval.set(seconds)
         await ctx.send(f"✅ Interval set to **{seconds}s** for this server.")
 
+    # -- clips -------------------------------------------------------------- #
+    @kickalert.command(name="clips")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clips(self, ctx: commands.Context, state: bool) -> None:
+        """Turn clip announcements for this server on or off."""
+        await self.config.guild(ctx.guild).clips_enabled.set(state)
+        if not state:
+            await ctx.send("Clip announcements are off.")
+            return
+        channel_id = await self.config.guild(ctx.guild).clips_channel_id()
+        interval = await self.config.guild(ctx.guild).clips_interval()
+        where = (
+            f"<#{channel_id}>"
+            if channel_id
+            else "each streamer's alert channel (no clip channel set)"
+        )
+        await ctx.send(
+            f"Clip announcements are on. New clips go to {where}, checked every "
+            f"{interval}s.\n"
+            "The first check per streamer only records what already exists, so "
+            "nothing old gets posted."
+        )
+
+    @kickalert.command(name="clipchannel")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipchannel(
+        self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None
+    ) -> None:
+        """Where clip alerts go; omit the channel to fall back per streamer."""
+        await self.config.guild(ctx.guild).clips_channel_id.set(
+            channel.id if channel else None
+        )
+        if channel:
+            await ctx.send(f"Clips will be posted in {channel.mention}.")
+        else:
+            await ctx.send(
+                "Clip channel cleared - clips go to each streamer's alert channel, "
+                "then to the default channel."
+            )
+
+    @kickalert.command(name="clipinterval")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipinterval(self, ctx: commands.Context, seconds: int) -> None:
+        """How often clip lists are checked (60-3600 seconds)."""
+        if not MIN_CLIPS_INTERVAL <= seconds <= MAX_CLIPS_INTERVAL:
+            await ctx.send(
+                f"Choose between {MIN_CLIPS_INTERVAL} and {MAX_CLIPS_INTERVAL} seconds."
+            )
+            return
+        await self.config.guild(ctx.guild).clips_interval.set(seconds)
+        await ctx.send(f"Clip check interval set to **{seconds}s**.")
+
+    @kickalert.command(name="clipsset")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipsset(
+        self, ctx: commands.Context, username: str, state: bool
+    ) -> None:
+        """Turn clip announcements for one streamer on or off."""
+        slug = _clean_slug(username)
+        async with self.config.guild(ctx.guild).streamers() as streamers:
+            if slug not in streamers:
+                await ctx.send(f"`{username}` is not being monitored.")
+                return
+            streamers[slug]["clips"] = state
+        await ctx.send(f"Clips for `{slug}` are now {'on' if state else 'off'}.")
+
+    @kickalert.command(name="clipscheck")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipscheck(self, ctx: commands.Context, username: str) -> None:
+        """Show a channel's newest clips without announcing anything."""
+        slug = _clean_slug(username)
+        if not slug:
+            await ctx.send("That is not a Kick slug.")
+            return
+        async with ctx.typing():
+            try:
+                clips = await self.api.get_clips(slug, 5)
+            except KickRateLimited as exc:
+                await ctx.send(f"kick.com is rate limiting right now: {exc}")
+                return
+            except KickError as exc:
+                await ctx.send(f"The clip list could not be read: {exc}")
+                return
+        if not clips:
+            await ctx.send(f"`{slug}` has no public clips.")
+            return
+        lines = []
+        for clip in clips[:5]:
+            created = _stamp(clip.created_at, "R") or "unknown"
+            lines.append(
+                f"**[{(clip.title or clip.id)[:60]}]({clip.url})** - "
+                f"{created} - {clip.views or 0} views"
+            )
+        embed = discord.Embed(
+            colour=discord.Colour(KICK_COLOR),
+            title=f"Newest clips of {slug}",
+            description="\n".join(lines),
+            timestamp=datetime.now(
+                EmbedSettings.from_guild_config(
+                    await self.config.guild(ctx.guild).all()
+                ).tz
+            ),
+        )
+        embed.set_footer(text="Kick.com | nothing was posted")
+        await ctx.send(embed=embed)
+
     @kickalert.command(name="style")
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_style(self, ctx: commands.Context, style: str) -> None:
@@ -1856,6 +2302,15 @@ class KickAlerts(commands.Cog):
         embed.add_field(
             name="Interval", value=f"{data.get('check_interval', 60)}s", inline=True
         )
+        clips_channel = data.get("clips_channel_id")
+        if data.get("clips_enabled"):
+            clips_value = (
+                f"every {_clamp_clips_interval(data.get('clips_interval'))}s -> "
+                f"{f'<#{clips_channel}>' if clips_channel else 'per streamer'}"
+            )
+        else:
+            clips_value = "off"
+        embed.add_field(name="Clips", value=clips_value, inline=True)
         embed.add_field(
             name="Style", value=str(data.get("embed_style", "detailed")), inline=True
         )
@@ -1872,7 +2327,9 @@ class KickAlerts(commands.Cog):
             value=(
                 "new summary post"
                 if str(data.get("offline_post") or "new") == "new"
-                else ("delete the alert" if data.get("auto_delete") else "edit the alert")
+                else (
+                    "delete the alert" if data.get("auto_delete") else "edit the alert"
+                )
             ),
             inline=True,
         )
@@ -1985,6 +2442,8 @@ class KickAlerts(commands.Cog):
             return
         if await self.config.guild(guild).global_channel_id() == channel.id:
             await self.config.guild(guild).global_channel_id.set(None)
+        if await self.config.guild(guild).clips_channel_id() == channel.id:
+            await self.config.guild(guild).clips_channel_id.set(None)
         async with self.config.guild(guild).streamers() as streamers:
             for slug, entry in streamers.items():
                 if isinstance(entry, dict) and entry.get("channel_id") == channel.id:

@@ -92,6 +92,11 @@ Grab API credentials at https://kick.com/settings/developer. Instead of `setcred
 | `[p]kickalert style <detailed\|minimal>` | Full embed, or a one-line alert |
 | `[p]kickalert autodelete <true\|false>` | Delete the alert when the stream ends instead of editing it (only with `offlinepost edit`) |
 | `[p]kickalert offlinepost <new\|edit>` | Stream end: post a fresh summary embed (removes the live alert) or edit the live alert in place |
+| `[p]kickalert clips <true\|false>` | Watch the channels' clips and post new ones |
+| `[p]kickalert clipchannel <#channel>` | Where clip alerts go (default: each streamer's channel) |
+| `[p]kickalert clipinterval <60-3600>` | Clip check interval in seconds |
+| `[p]kickalert clipsset <username> <true\|false>` | Clip alerts for one streamer |
+| `[p]kickalert clipscheck <username>` | Show the newest clips without posting |
 | `[p]kickalert editlive <true\|false>` | Keep refreshing the alert while the stream runs |
 | `[p]kickalert timezone <-12..14>` | Embed timestamp offset for this server |
 | `[p]kickalert toggleviewers <true\|false>` | Show or hide the viewer count |
@@ -111,6 +116,7 @@ Notes:
 - The end-of-stream summary counts viewers on every poll, so the average is the mean of those samples and the peak is the highest one seen. A stream that ends within one poll interval has a stream time but no viewer statistics. The counters reset with every new broadcast.
 - Credentials set with `[p]set api kick …` take effect immediately, without a reload. If none are stored yet, `[p]kickalert authstatus` offers Red's owner-only form so they never have to appear in chat.
 - The poll loop backs off on rate limits (HTTP 429) and API errors and never dies from them. If the alert channel is gone or the bot lacks **Send Messages** / **Embed Links** there, the alert is skipped and retried on the next tick, so nothing is lost while permissions are fixed.
+- Clip alerts use Kick's keyless web endpoint (`kick.com/api/v2/channels/<slug>/clips`), because the public API exposes no clip list. The first check per streamer is silent by design; after that new clips are detected by id, posted oldest-first and never announced twice.
 - Deleting the alerts channel while it is configured clears the reference automatically.
 - Upgrading from 2.x: existing settings and monitored streamers are kept. Credentials stored with the old config keys are moved into Red's shared `kick` token store on the first start, and the old keys are cleared.
 
