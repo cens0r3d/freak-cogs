@@ -608,10 +608,12 @@ class EmbedSettings:
 
 def build_live_embed(info: LiveInfo, settings: EmbedSettings) -> discord.Embed:
     """The "is live" announcement embed."""
+    # No "Live on TikTok" placeholder title: the watch link below already says
+    # it, and a duplicate line just pushes the real content down.
     embed = discord.Embed(
         colour=discord.Colour(TIKTOK_COLOR),
-        title=info.title or "Live on TikTok",
-        url=info.url,
+        title=info.title or None,
+        url=info.url if info.title else None,
         timestamp=datetime.now(settings.tz),
     )
     embed.set_author(name=f"@{info.handle} is live on TikTok", url=info.url)
@@ -627,10 +629,14 @@ def build_live_embed(info: LiveInfo, settings: EmbedSettings) -> discord.Embed:
     lines.append("")
     lines.append(f"**[Watch on TikTok]({info.url})**")
     embed.description = "\n".join(lines)
-    if info.avatar_url:
-        embed.set_thumbnail(url=info.avatar_url)
     if info.cover_url:
         embed.set_image(url=info.cover_url)
+        if info.avatar_url:
+            embed.set_thumbnail(url=info.avatar_url)
+    elif info.avatar_url:
+        # No stream cover (stub rooms): the avatar carries the embed, and small
+        # as a thumbnail it was barely visible.
+        embed.set_image(url=info.avatar_url)
     embed.set_footer(text="TikTok LIVE")
     return embed
 
@@ -673,6 +679,8 @@ def build_content_embed(
     embed.description = "\n".join(lines)
     if video.cover_url:
         embed.set_image(url=video.cover_url)
+    elif avatar_url:
+        embed.set_image(url=avatar_url)
     embed.set_footer(text="TikTok | New clip")
     return embed
 
@@ -692,7 +700,7 @@ def build_offline_embed(
     )
     embed.set_author(name=f"@{info.handle} is offline", url=info.url)
     if info.avatar_url:
-        embed.set_thumbnail(url=info.avatar_url)
+        embed.set_image(url=info.avatar_url)
     pretty = format_duration(duration)
     if pretty:
         embed.add_field(name="Duration", value=pretty, inline=True)
@@ -803,7 +811,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.4"
+    __version__ = "1.0.5"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot

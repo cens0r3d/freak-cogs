@@ -64,10 +64,12 @@ like a permanently offline creator.
 
 **Images come from the payloads themselves, no extra request.** The live lookup
 carries `user.avatarLarger` (present even in a stub room) and the stream's cover;
-the embed page carries `userInfo.avatarThumbUrl` and the clip cover. Live alerts
-use the cover as the image and the avatar as the thumbnail, new-clip alerts use
-the avatar as the author icon and the clip cover as the image, and the
-end-of-stream embed keeps the avatar. The CDN URLs are signed with an expiry, so
+the embed page carries `userInfo.avatarThumbUrl` and the clip cover. A live alert shows the stream cover as the
+large image with the avatar as a small thumbnail; when a room has no cover (stub
+rooms) the avatar itself is the large image. New-clip alerts use the avatar as
+the author icon and the clip cover as the image, falling back to the avatar when
+the clip has none, and the end-of-stream embed keeps the avatar large. The live
+embed has no "Live on TikTok" placeholder title - the watch link already says it. The CDN URLs are signed with an expiry, so
 they are re-read on every poll and never stored.
 
 **Viewer counts can be withheld.** For some accounts TikTok answers with a stub
