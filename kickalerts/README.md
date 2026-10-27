@@ -54,6 +54,26 @@ still goes through the official API.
   unmuting later does not announce old clips.
 - `[p]kickalert clipscheck <slug>` shows the five newest clips without posting.
 
+### The clip itself as a file
+
+Kick serves clips **only as HLS playlists** (`clips.kick.com/.../playlist.m3u8`,
+segments are `.ts`); there is no direct MP4 - `video.mp4`, `clip.mp4` and
+`source.mp4` all answer 403. With `[p]kickalert clipfiles true` (default on) the
+cog therefore runs `ffmpeg -c copy` on the playlist and posts the resulting MP4
+under the announcement, so Discord renders the video with its own download
+button. Measured: a 10 s clip becomes 3.0 MB, a 45 s clip 9.5 MB (h264 720p,
+~2.3 Mbit/s).
+
+- `[p]kickalert clipmax <1-25>` - size ceiling per file, default 20 MB. Checked
+  against the guild's upload limit too; anything larger is skipped and only the
+  embed is posted.
+- Conversions run one at a time (a backlog should not start ten ffmpeg processes),
+  with a 180 s timeout and a 900 s duration cap.
+- ffmpeg missing, a broken playlist, a timeout or a size overrun all cost only
+  the file, never the announcement.
+- Needs **Attach Files** in the target channel; without it the cog logs a warning
+  and posts the embed alone.
+
 The full command list, the placeholder set and the permission model
 (**Manage Server** for everything except the owner-only `setcreds`) are in the
 [repository README](../README.md#kickalerts).

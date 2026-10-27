@@ -19,9 +19,12 @@ import io
 import logging
 import random
 import re
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import aiohttp
@@ -99,6 +102,8 @@ DEFAULT_GUILD: Dict[str, Any] = {
     "clips_enabled": False,
     "clips_interval": 300,
     "clips_channel_id": None,
+    "clips_attach": True,
+    "clips_max_mb": 20,
 }
 
 #: Keys every streamer entry carries; missing ones fall back to these.
@@ -450,6 +455,14 @@ def _clamp_interval(seconds: Any) -> int:
     return max(MIN_INTERVAL, min(MAX_INTERVAL, value))
 
 
+def _clamp_clip_mb(value: Any) -> int:
+    """Clamp the clip file size setting into 1-25 MB."""
+    megabytes = _as_int(value)
+    if megabytes is None:
+        return int(DEFAULT_GUILD["clips_max_mb"])
+    return max(1, min(25, megabytes))
+
+
 def _clamp_clips_interval(seconds: Any) -> int:
     """Clamp a stored clip poll interval into ``[MIN, MAX]_CLIPS_INTERVAL``."""
     value = _as_int(seconds)
@@ -683,6 +696,65 @@ class KickAPI:
             return None
         return (await self.get_channels([cleaned])).get(cleaned)
 
+    async def download_clip(
+        self, clip_url: Optional[str], max_bytes: int, timeout: int = 180
+    ) -> Optional[bytes]:
+        """Remux a clip's HLS playlist into an MP4 and return it.
+
+        Kick serves clips only as ``.m3u8`` playlists (segments are ``.ts``), so a
+        playable file needs ffmpeg. Everything else - a missing binary, a broken
+        playlist, a conversion timeout - returns ``None`` instead of raising, so a
+        failed conversion can never cost the clip announcement.
+        """
+        if not clip_url or ".m3u8" not in clip_url:
+            return None
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise KickError("ffmpeg is not installed, cannot convert clips")
+        with tempfile.TemporaryDirectory(prefix="kickclip-") as workdir:
+            target = Path(workdir) / "clip.mp4"
+            command = [
+                ffmpeg,
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                clip_url,
+                "-t",
+                "900",
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                str(target),
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                log.info("KickAlerts: clip conversion timed out")
+                return None
+            if proc.returncode != 0 or not target.exists():
+                log.info(
+                    "KickAlerts: clip conversion failed: %s",
+                    (stderr or b"")[:300].decode("utf-8", "replace"),
+                )
+                return None
+            if target.stat().st_size > max_bytes:
+                log.info(
+                    "KickAlerts: clip is %s bytes, over the %s byte limit",
+                    target.stat().st_size,
+                    max_bytes,
+                )
+                return None
+            return target.read_bytes()
+
     async def get_clips(self, slug: str, limit: int = 10) -> List[ClipInfo]:
         """The newest clips of one channel, from Kick's web endpoint.
 
@@ -723,6 +795,7 @@ class ClipInfo:
     slug: str
     title: Optional[str] = None
     thumbnail: Optional[str] = None
+    video_url: Optional[str] = None
     duration: Optional[int] = None
     views: Optional[int] = None
     likes: Optional[int] = None
@@ -772,6 +845,8 @@ def parse_clips(slug: str, payload: Any) -> List[ClipInfo]:
                 slug=slug,
                 title=_as_text(item.get("title")),
                 thumbnail=_as_text(item.get("thumbnail_url")),
+                video_url=_as_text(item.get("video_url"))
+                or _as_text(item.get("clip_url")),
                 duration=_as_int(item.get("duration")),
                 views=views,
                 likes=likes,
@@ -1033,7 +1108,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.3.1"
+    __version__ = "3.4.0"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1045,6 +1120,9 @@ class KickAlerts(commands.Cog):
         self.api = KickAPI()
         self._watch_task: Optional[asyncio.Task] = None
         self._clips_task: Optional[asyncio.Task] = None
+        # One conversion at a time: ffmpeg is cheap per clip but not free, and a
+        # backlog of new clips should not spawn ten of them at once.
+        self._clip_lock = asyncio.Semaphore(1)
         self._last_poll: Optional[datetime] = None
         self._last_result: Dict[str, int] = {}
 
@@ -1251,7 +1329,7 @@ class KickAlerts(commands.Cog):
             if channel is None:
                 continue
             announced += await self._handle_clips(
-                guild, slug, state, clips[slug], channel, settings
+                guild, slug, state, clips[slug], channel, settings, data
             )
         return announced
 
@@ -1282,7 +1360,9 @@ class KickAlerts(commands.Cog):
         clips: List[ClipInfo],
         channel: discord.TextChannel,
         settings: EmbedSettings,
+        data: Optional[Dict[str, Any]] = None,
     ) -> int:
+        data = data or {}
         """Post the clips that were not seen before."""
         seen = {str(item) for item in (state.get("seen_clips") or [])}
         if not state.get("clips_primed"):
@@ -1295,6 +1375,8 @@ class KickAlerts(commands.Cog):
             return 0
         if not self._can_post(guild, channel, slug):
             return 0
+        announce_file = bool(data.get("clips_attach", True))
+        max_mb = _clamp_clip_mb(data.get("clips_max_mb"))
         announced = 0
         # Oldest first, so a backlog reads in the order it was clipped.
         for clip in reversed(fresh):
@@ -1304,6 +1386,8 @@ class KickAlerts(commands.Cog):
             except discord.HTTPException:
                 log.exception("KickAlerts: could not post the clip %s", clip.id)
                 break
+            if announce_file:
+                await self._send_clip_file(guild, channel, clip, max_mb)
         await self._remember_clips(guild, slug, clips)
         if announced:
             log.info("KickAlerts: announced %s clip(s) for %s", announced, slug)
@@ -1327,6 +1411,40 @@ class KickAlerts(commands.Cog):
                     merged.append(clip_id)
             entry["seen_clips"] = merged[:SEEN_CLIP_LIMIT]
             entry["clips_primed"] = True
+
+    async def _send_clip_file(
+        self,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        clip: ClipInfo,
+        max_mb: int,
+    ) -> None:
+        """Convert the clip to an MP4 and post it under the embed."""
+        guild_limit = _as_int(getattr(guild, "filesize_limit", None))
+        limit = min(max_mb * 1024 * 1024, guild_limit or max_mb * 1024 * 1024)
+        permissions = channel.permissions_for(guild.me)
+        if not permissions.attach_files:
+            log.warning(
+                "KickAlerts: missing Attach Files in #%s, not posting the clip",
+                channel,
+            )
+            return
+        async with self._clip_lock:
+            try:
+                data = await self.api.download_clip(clip.video_url, limit)
+            except KickError as exc:
+                log.warning("KickAlerts: clip conversion unavailable: %s", exc)
+                return
+        if not data:
+            return
+        filename = f"{clip.slug}_{clip.id}.mp4"
+        try:
+            await channel.send(
+                file=discord.File(io.BytesIO(data), filename=filename),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("KickAlerts: could not upload the clip %s", clip.id)
 
     async def _check_all_guilds(self) -> Dict[str, int]:
         """One polling pass: fetch every watched slug and update every guild."""
@@ -2064,6 +2182,35 @@ class KickAlerts(commands.Cog):
         await self.config.guild(ctx.guild).clips_interval.set(seconds)
         await ctx.send(f"Clip check interval set to **{seconds}s**.")
 
+    @kickalert.command(name="clipfiles")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipfiles(self, ctx: commands.Context, state: bool) -> None:
+        """Post the clip itself as an MP4 under the announcement."""
+        await self.config.guild(ctx.guild).clips_attach.set(state)
+        if not state:
+            await ctx.send("Clip files are off - announcements stay embed-only.")
+            return
+        if shutil.which("ffmpeg") is None:
+            await ctx.send(
+                "**ffmpeg is not installed on the bot host**, so clips cannot be "
+                "converted to MP4. Install it and reload the cog."
+            )
+            return
+        await ctx.send(
+            "Clip files are on: every announced clip is converted to MP4 and "
+            f"posted as a file (up to `{ctx.clean_prefix}kickalert clipmax` MB, "
+            "default 20). Clips over the limit are skipped."
+        )
+
+    @kickalert.command(name="clipmax")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_clipmax(self, ctx: commands.Context, megabytes: int) -> None:
+        """Largest clip file to attach, in MB (1-25)."""
+        value = _clamp_clip_mb(megabytes)
+        await self.config.guild(ctx.guild).clips_max_mb.set(value)
+        note = "" if value == megabytes else f" (clamped from {megabytes})"
+        await ctx.send(f"Clip files up to {value} MB are attached{note}.")
+
     @kickalert.command(name="clipsset")
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_clipsset(
@@ -2317,6 +2464,16 @@ class KickAlerts(commands.Cog):
         else:
             clips_value = "off"
         embed.add_field(name="Clips", value=clips_value, inline=True)
+        if data.get("clips_enabled"):
+            embed.add_field(
+                name="Clip files",
+                value=(
+                    f"MP4 up to {_clamp_clip_mb(data.get('clips_max_mb'))} MB"
+                    if data.get("clips_attach", True)
+                    else "off"
+                ),
+                inline=True,
+            )
         embed.add_field(
             name="Style", value=str(data.get("embed_style", "detailed")), inline=True
         )
