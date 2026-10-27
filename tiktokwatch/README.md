@@ -39,6 +39,8 @@ Clipping a profile URL works too: `[p]tiktok add tiktok.com/@handle/video/... #a
 | `[p]tiktok message <handle> [text]` | Custom line above the alert; `{handle} {title} {url} {viewers} {started}` |
 | `[p]tiktok interval live\|content <seconds>` | Poll interval (live 30–3600 s, clips 120–7200 s) |
 | `[p]tiktok alerts live\|content\|all <on\|off>` | Turn a kind of announcement on or off |
+| `[p]tiktok videos <on\|off>` | Also post the MP4 of a new clip (needs **Attach Files**) |
+| `[p]tiktok videomax <1-25>` | Largest clip file to attach, in MB |
 | `[p]tiktok offline new\|edit\|delete` | What happens when a stream ends |
 | `[p]tiktok settings` | Current configuration |
 | `[p]tiktok check <handle>` | Probe TikTok right now (live state + latest clip) |
@@ -91,6 +93,22 @@ with the profile's *pinned* clip, which can be months old — announcing index 0
 would repost an old video on every poll. Each account keeps the last 30 ids.
 The first clip scan after `add` is silent on purpose; `[p]tiktok add` primes the
 list when the account is added.
+
+## Clip details and the video file
+
+A clip announcement carries what the mobile app endpoint
+(`api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/`) knows and the web payloads do
+not: the real upload date, plays, likes, comments and the clip's length. It is
+called once per **announced** clip, never during a poll, and a failure only costs
+the extra line - the embed still goes out.
+
+The same answer carries the MP4 URLs (`play_addr`, `download_addr`) and the file
+size. With `[p]tiktok videos on` (default) the clip is posted as a file right
+after the embed, so the video plays in Discord. The size is checked against
+`data_size` **before** downloading, and again while streaming, against the
+smaller of `[p]tiktok videomax` (default 24 MB) and the guild's own upload limit;
+anything larger is skipped with a log line instead of a failed send. A missing,
+expired or 404 CDN URL likewise just means "embed only".
 
 ## Rate limiting and proxies
 

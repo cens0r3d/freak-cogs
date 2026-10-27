@@ -29,7 +29,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import discord
@@ -49,6 +49,29 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+
+#: Mobile app endpoint: the one place that hands out clip details (and the
+#: MP4 URLs) without a request signature.
+MOBILE_FEED = "https://api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/"
+MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Mobile Safari/537.36"
+)
+MOBILE_PARAMS = {
+    "region": "US",
+    "carrier_region": "US",
+    "iid": "7318518857994389254",
+    "device_id": "7318517321748022790",
+    "channel": "googleplay",
+    "app_name": "musical_ly",
+    "version_code": "300904",
+    "device_platform": "android",
+    "device_type": "ASUS_Z01QD",
+    "os_version": "9",
+}
+#: Discord's own ceiling for a bot upload is the guild's filesize_limit; this is
+#: the sane default and can be lowered per guild.
+DEFAULT_VIDEO_MAX_MB = 24
 
 TIKTOK_COLOR = 0xFE2C55
 CONTENT_COLOR = 0x25F4EE
@@ -86,6 +109,8 @@ DEFAULT_GUILD: Dict[str, Any] = {
     "content_interval": 600,
     "announce_live": True,
     "announce_content": True,
+    "announce_videos": True,
+    "video_max_mb": DEFAULT_VIDEO_MAX_MB,
     "announce_existing": False,
     "show_viewers": True,
     "hour_format": "local",
@@ -360,6 +385,90 @@ class ClipPage:
     nickname: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class VideoStats:
+    """Clip details only the mobile app endpoint hands out."""
+
+    created_at: Optional[datetime] = None
+    plays: Optional[int] = None
+    likes: Optional[int] = None
+    comments: Optional[int] = None
+    shares: Optional[int] = None
+    duration_s: Optional[int] = None
+    play_url: Optional[str] = None
+    download_url: Optional[str] = None
+    size_bytes: Optional[int] = None
+
+
+def _pick_addr(addr: Any) -> Tuple[Optional[str], Optional[int]]:
+    """First URL and declared size of a TikTok ``play_addr`` style object."""
+    if not isinstance(addr, dict):
+        return None, None
+    urls = [url for url in (addr.get("url_list") or []) if isinstance(url, str) and url]
+    size = _as_int(addr.get("data_size"))
+    return (urls[0] if urls else None, size)
+
+
+def parse_video_stats(video_id: str, payload: Any) -> Optional[VideoStats]:
+    """Read one clip's details out of an ``aweme/v1/feed`` answer."""
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("aweme_list")
+    if not isinstance(items, list):
+        return None
+    item: Dict[str, Any] = {}
+    for candidate in items:
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("aweme_id") or "") == str(video_id):
+            item = candidate
+            break
+    if not item:
+        return None
+    video_raw = item.get("video")
+    video: Dict[str, Any] = video_raw if isinstance(video_raw, dict) else {}
+    stats_raw = item.get("statistics")
+    stats: Dict[str, Any] = stats_raw if isinstance(stats_raw, dict) else {}
+    play_url, size = _pick_addr(video.get("play_addr"))
+    if play_url is None:
+        play_url, size = _pick_addr(video.get("play_addr_h264"))
+    download_url, download_size = _pick_addr(video.get("download_addr"))
+    created = None
+    created_raw = _as_int(item.get("create_time"))
+    if created_raw:
+        try:
+            created = datetime.fromtimestamp(created_raw, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            created = None
+    duration_ms = _as_int(video.get("duration"))
+    return VideoStats(
+        created_at=created,
+        plays=_as_int(stats.get("play_count")),
+        likes=_as_int(stats.get("digg_count")),
+        comments=_as_int(stats.get("comment_count")),
+        shares=_as_int(stats.get("share_count")),
+        duration_s=(duration_ms // 1000) if duration_ms else None,
+        play_url=play_url,
+        download_url=download_url,
+        size_bytes=size or download_size,
+    )
+
+
+def format_day(moment: Optional[datetime], tz: timezone) -> Optional[str]:
+    """``21.08.2026`` - a clip's upload date needs the year."""
+    if moment is None:
+        return None
+    return moment.astimezone(tz).strftime("%d.%m.%Y")
+
+
+def format_length(seconds: Optional[int]) -> Optional[str]:
+    """``1:23`` for a clip duration."""
+    if not seconds or seconds < 0:
+        return None
+    minutes, rest = divmod(int(seconds), 60)
+    return f"{minutes}:{rest:02d}"
+
+
 def parse_clip_page(html: str) -> ClipPage:
     """Read the clip list and the profile image out of an embed page."""
     videos = parse_videos(html)
@@ -538,13 +647,20 @@ class TikTokAPI:
         if session is not None and not session.closed:
             await session.close()
 
-    async def _text(self, url: str, params: Optional[Dict[str, str]] = None) -> str:
+    async def _text(
+        self,
+        url: str,
+        params: Optional[Dict[str, str]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> str:
         """GET one URL and return its body, mapping TikTok's answers to errors."""
         await self.open()
         if self._session is None:  # pragma: no cover - open() guarantees it
             raise TikTokError("no HTTP session")
         try:
-            async with self._session.get(url, params=params) as response:
+            async with self._session.get(
+                url, params=params, headers=headers
+            ) as response:
                 body = await response.text(errors="replace")
                 if response.status in (403, 429):
                     raise TikTokBlocked(
@@ -577,6 +693,55 @@ class TikTokAPI:
         """The clips and the profile image from a profile's embed page."""
         html = await self._text(CONTENT_URL.format(handle=handle))
         return parse_clip_page(html)
+
+    async def video_stats(self, video_id: str) -> Optional[VideoStats]:
+        """Upload date, counters and MP4 URLs for one clip.
+
+        Only the mobile app endpoint exposes these without a signature. It is
+        called for a clip that is about to be announced, never during a poll.
+        """
+        params = {"aweme_id": video_id, **MOBILE_PARAMS}
+        body = await self._text(MOBILE_FEED, params, headers={"User-Agent": MOBILE_UA})
+        try:
+            payload = json.loads(body)
+        except ValueError as exc:
+            raise TikTokError("the mobile feed answered with no JSON") from exc
+        return parse_video_stats(video_id, payload)
+
+    async def download(
+        self, url: str, max_bytes: int, timeout: int = 90
+    ) -> Optional[bytes]:
+        """Fetch a clip into memory, giving up as soon as it exceeds the cap."""
+        await self.open()
+        if self._session is None:  # pragma: no cover
+            raise TikTokError("no HTTP session")
+        try:
+            async with self._session.get(
+                url, timeout=aiohttp.ClientTimeout(total=timeout)
+            ) as response:
+                if response.status not in (200, 206):
+                    # A missing or expired CDN URL is not worth an exception: the
+                    # caller simply posts the embed without a file.
+                    log.info(
+                        "TikTokWatch: the video CDN answered HTTP %s", response.status
+                    )
+                    return None
+                buffer = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    buffer.extend(chunk)
+                    if len(buffer) > max_bytes:
+                        log.info(
+                            "TikTokWatch: clip is larger than %s bytes, skipping",
+                            max_bytes,
+                        )
+                        return None
+                return bytes(buffer)
+        except asyncio.TimeoutError:
+            log.info("TikTokWatch: the video download timed out")
+            return None
+        except aiohttp.ClientError as exc:
+            log.info("TikTokWatch: the video download failed: %s", exc)
+            return None
 
 
 # --------------------------------------------------------------------------- #
@@ -647,6 +812,7 @@ def build_content_embed(
     settings: EmbedSettings,
     avatar_url: Optional[str] = None,
     nickname: Optional[str] = None,
+    stats: Optional[VideoStats] = None,
 ) -> discord.Embed:
     """The "new clip" announcement embed."""
     url = video.url(handle)
@@ -673,8 +839,28 @@ def build_content_embed(
     if description:
         lines.append(f"> {description}")
         lines.append("")
-    if video.play_count:
-        lines.append(f"**Plays:** {video.play_count}")
+    counters: List[str] = []
+    if stats is not None and stats.plays is not None:
+        counters.append(f"**Plays:** {_play_count(stats.plays)}")
+        if stats.likes is not None:
+            counters.append(f"**Likes:** {_play_count(stats.likes)}")
+        if stats.comments is not None:
+            counters.append(f"**Comments:** {_play_count(stats.comments)}")
+    elif video.play_count:
+        counters.append(f"**Plays:** {video.play_count}")
+    if counters:
+        lines.append(" - ".join(counters))
+    meta: List[str] = []
+    if stats is not None:
+        day = format_day(stats.created_at, settings.tz)
+        if day:
+            meta.append(f"**Posted:** {day}")
+        length = format_length(stats.duration_s)
+        if length:
+            meta.append(f"**Length:** {length}")
+    if meta:
+        lines.append(" - ".join(meta))
+    lines.append("")
     lines.append(f"**[Watch on TikTok]({url})**")
     embed.description = "\n".join(lines)
     if video.cover_url:
@@ -811,7 +997,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.5"
+    __version__ = "1.0.6"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1241,6 +1427,8 @@ class TikTokWatch(commands.Cog):
                 last_video_id=chosen[0].video_id,
             )
             return "muted"
+        attach_video = bool(data.get("announce_videos", True))
+        max_mb = _clamp(data.get("video_max_mb"), 1, 25, DEFAULT_VIDEO_MAX_MB)
         # Announce oldest-first so a backlog reads in the order it was posted.
         for video in reversed(chosen):
             if not self._can_post(guild, channel, handle):
@@ -1253,6 +1441,7 @@ class TikTokWatch(commands.Cog):
                 "started": None,
             }
             content = self._alert_text(state, guild, values)
+            stats = await self._clip_stats(handle, video)
             try:
                 await channel.send(
                     content=content,
@@ -1262,6 +1451,7 @@ class TikTokWatch(commands.Cog):
                         settings,
                         avatar_url=page.avatar_url,
                         nickname=page.nickname,
+                        stats=stats,
                     ),
                     allowed_mentions=discord.AllowedMentions(
                         roles=True,
@@ -1271,6 +1461,8 @@ class TikTokWatch(commands.Cog):
             except discord.HTTPException:
                 log.exception("TikTokWatch: could not post a clip for %s", handle)
                 return "no-permission"
+            if attach_video:
+                await self._send_video(guild, channel, handle, video, stats, max_mb)
         await self._store_account(
             guild,
             handle,
@@ -1280,6 +1472,70 @@ class TikTokWatch(commands.Cog):
         )
         log.info("TikTokWatch: announced %s new clip(s) for @%s", len(chosen), handle)
         return "announced"
+
+    async def _clip_stats(self, handle: str, video: VideoInfo) -> Optional[VideoStats]:
+        """Fetch upload date, counters and MP4 URLs for one clip.
+
+        Best effort: the announcement goes out even when this endpoint fails, so
+        an enrichment can never cost a clip alert.
+        """
+        try:
+            return await self.api.video_stats(video.video_id)
+        except TikTokBlocked as exc:
+            log.warning(
+                "TikTokWatch: mobile feed rate limited while enriching %s: %s",
+                handle,
+                exc,
+            )
+        except TikTokError as exc:
+            log.debug("TikTokWatch: no clip details for %s: %s", video.video_id, exc)
+        return None
+
+    async def _send_video(
+        self,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        handle: str,
+        video: VideoInfo,
+        stats: Optional[VideoStats],
+        max_mb: int,
+    ) -> None:
+        """Post the clip itself as an MP4, if it fits Discord's upload limit."""
+        if stats is None:
+            return
+        url = stats.play_url or stats.download_url
+        if not url:
+            return
+        guild_limit = _as_int(getattr(guild, "filesize_limit", None))
+        limit = min(
+            max_mb * 1024 * 1024, guild_limit or DEFAULT_VIDEO_MAX_MB * 1024 * 1024
+        )
+        if stats.size_bytes and stats.size_bytes > limit:
+            log.info(
+                "TikTokWatch: clip %s is %s bytes, over the %s byte limit",
+                video.video_id,
+                stats.size_bytes,
+                limit,
+            )
+            return
+        data = await self.api.download(url, limit)
+        if not data:
+            return
+        permissions = channel.permissions_for(guild.me)
+        if not permissions.attach_files:
+            log.warning(
+                "TikTokWatch: missing Attach Files in #%s, not posting the clip",
+                channel,
+            )
+            return
+        filename = f"{handle}_{video.video_id}.mp4"
+        try:
+            await channel.send(
+                file=discord.File(io.BytesIO(data), filename=filename),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("TikTokWatch: could not upload the clip for %s", handle)
 
     @staticmethod
     def _remember(known: List[str], fresh: List[VideoInfo]) -> List[str]:
@@ -1796,6 +2052,28 @@ class TikTokWatch(commands.Cog):
             f"Announcements for **{kind}** are now {'on' if state else 'off'}."
         )
 
+    @tiktok.command(name="videos")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def tiktok_videos(self, ctx: commands.Context, state: bool) -> None:
+        """Attach the MP4 of a new clip to its announcement."""
+        await self.config.guild(ctx.guild).announce_videos.set(state)
+        if state:
+            await ctx.send(
+                "New clips are posted as an MP4 as well (needs **Attach Files** "
+                f"in the channel, and respects `{ctx.clean_prefix}tiktok videomax`)."
+            )
+        else:
+            await ctx.send("New clips are announced as an embed only.")
+
+    @tiktok.command(name="videomax")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def tiktok_videomax(self, ctx: commands.Context, megabytes: int) -> None:
+        """Largest clip file to attach, in MB (1-25)."""
+        value = max(1, min(25, int(megabytes)))
+        await self.config.guild(ctx.guild).video_max_mb.set(value)
+        note = "" if value == megabytes else f" (clamped from {megabytes})"
+        await ctx.send(f"Clips up to {value} MB are attached{note}.")
+
     @tiktok.command(name="offline")
     @checks.admin_or_permissions(manage_guild=True)
     async def tiktok_offline(self, ctx: commands.Context, mode: str) -> None:
@@ -1844,6 +2122,9 @@ class TikTokWatch(commands.Cog):
             f"**Live embed refresh:** "
             f"{'on' if data.get('edit_live_alerts', True) else 'off'} "
             f"(every {data.get('live_update_seconds')} s)",
+            f"**Clip files (MP4):** "
+            f"{'on' if data.get('announce_videos', True) else 'off'} "
+            f"(max {data.get('video_max_mb')} MB)",
             f"**Stream end:** {data.get('offline_post')}",
             f"**Timezone offset:** UTC{int(data.get('timezone_offset') or 0):+d}",
         ]
