@@ -40,7 +40,7 @@ Clipping a profile URL works too: `[p]tiktok add tiktok.com/@handle/video/... #a
 | `[p]tiktok interval live\|content <seconds>` | Poll interval (live 30–3600 s, clips 120–7200 s) |
 | `[p]tiktok alerts live\|content\|all <on\|off>` | Turn a kind of announcement on or off |
 | `[p]tiktok videos <on\|off>` | Also post the MP4 of a new clip (needs **Attach Files**) |
-| `[p]tiktok videomax <1-25>` | Largest clip file to attach, in MB |
+| `[p]tiktok videomax <1-20>` | Largest clip file to attach, in MiB (max 20 = Discord's bot upload limit) |
 | `[p]tiktok offline new\|edit\|delete` | What happens when a stream ends |
 | `[p]tiktok settings` | Current configuration |
 | `[p]tiktok check <handle>` | Probe TikTok right now (live state + latest clip) |
@@ -112,7 +112,8 @@ The same answer carries the MP4 URLs (`play_addr`, `download_addr`) and the file
 size. With `[p]tiktok videos on` (default) the clip is posted as a file right
 after the embed, so the video plays in Discord. The size is checked against
 `data_size` **before** downloading, and again while streaming, against the
-smaller of `[p]tiktok videomax` (default 24 MB) and the guild's own upload limit;
+smaller of `[p]tiktok videomax` (default 20 MiB, which is Discord's upload limit for
+bots - MiB because 20 * 1024 * 1024 bytes is the real ceiling) and the guild's own upload limit;
 anything larger is skipped with a log line instead of a failed send. A missing,
 expired or 404 CDN URL likewise just means "embed only".
 

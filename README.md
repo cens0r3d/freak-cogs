@@ -146,6 +146,7 @@ Setup — every account brings its own channel, there is no guild-wide default:
 | `[p]tiktok interval <live\|content> <seconds>` | Poll interval (live 30–3600, clips 120–7200) |
 | `[p]tiktok alerts <live\|content\|all> <on\|off>` | Turn a kind of announcement on or off |
 | `[p]tiktok offline <new\|edit\|delete>` | Stream end: fresh summary, edit the alert, or delete it |
+| `[p]tiktok videos <on\|off>` | Attach the clip itself as an MP4 (`videomax` = size ceiling in MiB, default and maximum 20, Discord's bot upload limit) |
 | `[p]tiktok settings` | Show this server's configuration |
 | `[p]tiktok check <handle>` | Look a handle up right now, without alerting |
 | `[p]tiktok test <handle>` | Post a sample live alert |

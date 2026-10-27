@@ -75,7 +75,10 @@ MOBILE_PARAMS = {
 }
 #: Discord's own ceiling for a bot upload is the guild's filesize_limit; this is
 #: the sane default and can be lowered per guild.
-DEFAULT_VIDEO_MAX_MB = 24
+DEFAULT_VIDEO_MAX_MB = 20
+#: Discord's upload limit for bots is 20 MiB. Asking for more only produces a
+#: failed send, so the clip setting is capped there.
+MAX_VIDEO_MIB = 20
 
 TIKTOK_COLOR = 0xFE2C55
 CONTENT_COLOR = 0x25F4EE
@@ -1057,7 +1060,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.7"
+    __version__ = "1.0.8"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1488,7 +1491,9 @@ class TikTokWatch(commands.Cog):
             )
             return "muted"
         attach_video = bool(data.get("announce_videos", True))
-        max_mb = _clamp(data.get("video_max_mb"), 1, 25, DEFAULT_VIDEO_MAX_MB)
+        max_mb = _clamp(
+            data.get("video_max_mb"), 1, MAX_VIDEO_MIB, DEFAULT_VIDEO_MAX_MB
+        )
         # Announce oldest-first so a backlog reads in the order it was posted.
         for video in reversed(chosen):
             if not self._can_post(guild, channel, handle):
@@ -1577,9 +1582,11 @@ class TikTokWatch(commands.Cog):
         if not url:
             return
         guild_limit = _as_int(getattr(guild, "filesize_limit", None))
-        limit = min(
-            max_mb * 1024 * 1024, guild_limit or DEFAULT_VIDEO_MAX_MB * 1024 * 1024
-        )
+        # MiB, not MB: Discord's limit is 20 * 1024 * 1024 bytes, so a file
+        # measured as "20 MB" decimal would already be rejected.
+        limit = min(max_mb, MAX_VIDEO_MIB) * 1024 * 1024
+        if guild_limit:
+            limit = min(limit, guild_limit)
         if stats.size_bytes and stats.size_bytes > limit:
             log.info(
                 "TikTokWatch: clip %s is %s bytes, over the %s byte limit",
@@ -2138,8 +2145,8 @@ class TikTokWatch(commands.Cog):
     @tiktok.command(name="videomax")
     @checks.admin_or_permissions(manage_guild=True)
     async def tiktok_videomax(self, ctx: commands.Context, megabytes: int) -> None:
-        """Largest clip file to attach, in MB (1-25)."""
-        value = max(1, min(25, int(megabytes)))
+        """Largest clip file to attach, in MiB (1-20)."""
+        value = max(1, min(MAX_VIDEO_MIB, int(megabytes)))
         await self.config.guild(ctx.guild).video_max_mb.set(value)
         note = "" if value == megabytes else f" (clamped from {megabytes})"
         await ctx.send(f"Clips up to {value} MB are attached{note}.")
@@ -2194,7 +2201,7 @@ class TikTokWatch(commands.Cog):
             f"(every {data.get('live_update_seconds')} s)",
             f"**Clip files (MP4):** "
             f"{'on' if data.get('announce_videos', True) else 'off'} "
-            f"(max {data.get('video_max_mb')} MB)",
+            f"(max {_clamp(data.get('video_max_mb'), 1, MAX_VIDEO_MIB, DEFAULT_VIDEO_MAX_MB)} MiB)",
             f"**Stream end:** {data.get('offline_post')}",
             f"**Timezone offset:** UTC{int(data.get('timezone_offset') or 0):+d}",
         ]
