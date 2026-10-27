@@ -97,6 +97,16 @@ and a signing service, not these endpoints).
 | A clip was never announced | The first scan is silent by design; the clip list was primed at `add` time |
 | Alerts work but no ping | `[p]tiktok setrole <handle> @role`; the bot needs Mention @everyone for the default role |
 
+## Pings
+
+Each account has its own ping role (`[p]tiktok setrole <handle> @role`). The
+default role is emitted as the literal `@everyone`, never as `<@&guild-id>` —
+Discord renders the raw form as `@@everyone`, which pings nobody.
+`allowed_mentions.everyone` is derived from the same comparison, so a configured
+`@everyone` actually pings, and any other role stays a normal role ping. If the
+bot lacks **Mention @everyone** in the channel, `setrole` says so at config time
+instead of leaving a silently ping-less alert.
+
 Data: only guild-level configuration in Red's Config — channel and role IDs,
 intervals, per-account settings, the last known live state and the last 30 clip
 ids. Nothing about individual Discord users is stored.

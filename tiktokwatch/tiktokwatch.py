@@ -226,25 +226,24 @@ def _tz_from(offset: Any) -> timezone:
 
 
 def ping_mention(guild: discord.Guild, role_id: Any) -> Optional[str]:
-    """The mention for a ping role, with ``@everyone`` spelled literally."""
+    """Mention text for a stored role id, safe for the ``@everyone`` role.
+
+    ``Role.mention`` is always ``<@&id>``, and the default role's id *is* the
+    guild id, so that raw form renders as ``@@everyone`` and pings nobody.
+    Comparing the ids directly needs no role object and survives a cache miss.
+    """
     identifier = _as_int(role_id)
     if not identifier:
         return None
-    role = guild.get_role(identifier)
-    if role is None:
-        return None
-    if role.is_default():
+    if identifier == guild.id:
         return "@everyone"
-    return role.mention
+    role = guild.get_role(identifier)
+    return role.mention if role is not None else None
 
 
 def pings_everyone(guild: discord.Guild, role_id: Any) -> bool:
-    """Whether the configured ping role is the guild's default role."""
-    identifier = _as_int(role_id)
-    if not identifier:
-        return False
-    role = guild.get_role(identifier)
-    return bool(role and role.is_default())
+    """Whether the stored ping role id is the guild's default role."""
+    return _as_int(role_id) == guild.id
 
 
 def render_template(template: str, values: Dict[str, Any]) -> str:
@@ -720,7 +719,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.0"
+    __version__ = "1.0.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1592,8 +1591,17 @@ class TikTokWatch(commands.Cog):
         )
         if role is None:
             await ctx.send(f"`@{cleaned}` no longer pings a role.")
-        else:
-            await ctx.send(f"`@{cleaned}` alerts will ping {role.mention}.")
+            return
+        mention = ping_mention(ctx.guild, role.id) or role.name
+        note = ""
+        if pings_everyone(ctx.guild, role.id):
+            permissions = ctx.channel.permissions_for(ctx.guild.me)
+            if not getattr(permissions, "mention_everyone", False):
+                note = (
+                    "\nI lack **Mention @everyone** in this channel, so the "
+                    "alert will be posted without a ping."
+                )
+        await ctx.send(f"`@{cleaned}` alerts will ping {mention}.{note}")
 
     @tiktok.command(name="message")
     @checks.admin_or_permissions(manage_guild=True)
@@ -1692,9 +1700,15 @@ class TikTokWatch(commands.Cog):
             for handle, raw in accounts.items()
             if not (raw or {}).get("channel_id")
         ]
+        with_ping = []
+        for handle, raw in accounts.items():
+            mention = ping_mention(ctx.guild, (raw or {}).get("ping_role_id"))
+            if mention:
+                with_ping.append(f"`@{handle}` -> {mention}")
         lines = [
             f"**Enabled:** {bool(data.get('enabled', True))}",
             f"**Accounts:** {len(accounts)}",
+            f"**Ping roles:** {', '.join(with_ping) if with_ping else 'none'}",
             "**Channel:** one per account (no guild-wide default)",
             f"**Accounts without a channel:** "
             f"{humanize_list(without_channel) if without_channel else 'none'}",
@@ -1790,7 +1804,10 @@ class TikTokWatch(commands.Cog):
                 state, ctx.guild, self._live_values(info, cleaned)
             ),
             embed=build_live_embed(fake_live(info), settings),
-            allowed_mentions=discord.AllowedMentions(roles=True),
+            allowed_mentions=discord.AllowedMentions(
+                roles=True,
+                everyone=pings_everyone(ctx.guild, state.get("ping_role_id")),
+            ),
         )
 
     @tiktok.command(name="debug")
