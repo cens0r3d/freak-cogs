@@ -99,8 +99,14 @@ list when the account is added.
 A clip announcement carries what the mobile app endpoint
 (`api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/`) knows and the web payloads do
 not: the real upload date, plays, likes, comments and the clip's length. It is
-called once per **announced** clip, never during a poll, and a failure only costs
-the extra line - the embed still goes out.
+called once per **announced** clip, never during a poll. That endpoint has the
+tightest quota of all sources — it answers `ratelimit triggered` (HTTP 429) after
+a few dozen calls — so it is backed by the public video page
+(`/@i/video/<id>`, no handle needed, ~400 KB): same date and counters, the file
+size from `bitrateInfo`, but no MP4 URL, because the page's `playAddr` is
+token-gated. A clip therefore still gets its numbers when the mobile endpoint is
+throttled, and only the file is skipped. Both paths are best effort: a failure
+never costs the alert.
 
 The same answer carries the MP4 URLs (`play_addr`, `download_addr`) and the file
 size. With `[p]tiktok videos on` (default) the clip is posted as a file right

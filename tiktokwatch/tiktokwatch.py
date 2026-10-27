@@ -53,6 +53,10 @@ USER_AGENT = (
 #: Mobile app endpoint: the one place that hands out clip details (and the
 #: MP4 URLs) without a request signature.
 MOBILE_FEED = "https://api22-normal-c-alisg.tiktokv.com/aweme/v1/feed/"
+#: Fallback for the clip details: the public video page needs no handle and
+#: carries ``itemStruct``. Its ``playAddr`` is token-gated (403 on a direct
+#: fetch), so this path provides numbers, not the file.
+VIDEO_PAGE = "https://www.tiktok.com/@i/video/{video_id}"
 MOBILE_UA = (
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Mobile Safari/537.36"
@@ -454,6 +458,57 @@ def parse_video_stats(video_id: str, payload: Any) -> Optional[VideoStats]:
     )
 
 
+def parse_video_page(html: str) -> Optional[VideoStats]:
+    """Read a clip's numbers out of the public video page (``itemStruct``)."""
+    marker = html.find('"itemStruct":')
+    if marker == -1:
+        return None
+    start = html.find("{", marker)
+    blob = _json_slice_at(html, start) if start != -1 else None
+    if not blob:
+        return None
+    try:
+        item = json.loads(blob)
+    except ValueError:
+        return None
+    if not isinstance(item, dict):
+        return None
+    video_raw = item.get("video")
+    video: Dict[str, Any] = video_raw if isinstance(video_raw, dict) else {}
+    stats_raw = item.get("stats")
+    stats: Dict[str, Any] = stats_raw if isinstance(stats_raw, dict) else {}
+    created = None
+    created_raw = _as_int(item.get("createTime"))
+    if created_raw:
+        try:
+            created = datetime.fromtimestamp(created_raw, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            created = None
+    size = None
+    bitrates = video.get("bitrateInfo")
+    if isinstance(bitrates, list):
+        for entry in bitrates:
+            if not isinstance(entry, dict):
+                continue
+            addr = entry.get("PlayAddr")
+            if not isinstance(addr, dict):
+                continue
+            candidate = _as_int(addr.get("DataSize"))
+            if candidate:
+                size = candidate
+                break
+    return VideoStats(
+        created_at=created,
+        plays=_as_int(stats.get("playCount")),
+        likes=_as_int(stats.get("diggCount")),
+        comments=_as_int(stats.get("commentCount")),
+        shares=_as_int(stats.get("shareCount")),
+        # The page reports seconds, the mobile endpoint milliseconds.
+        duration_s=_as_int(video.get("duration")) or None,
+        size_bytes=size,
+    )
+
+
 def format_day(moment: Optional[datetime], tz: timezone) -> Optional[str]:
     """``21.08.2026`` - a clip's upload date needs the year."""
     if moment is None:
@@ -707,6 +762,11 @@ class TikTokAPI:
         except ValueError as exc:
             raise TikTokError("the mobile feed answered with no JSON") from exc
         return parse_video_stats(video_id, payload)
+
+    async def video_page_stats(self, video_id: str) -> Optional[VideoStats]:
+        """Fallback details from the public video page (numbers, no MP4 URL)."""
+        html = await self._text(VIDEO_PAGE.format(video_id=video_id))
+        return parse_video_page(html)
 
     async def download(
         self, url: str, max_bytes: int, timeout: int = 90
@@ -997,7 +1057,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.6"
+    __version__ = "1.0.7"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1476,19 +1536,29 @@ class TikTokWatch(commands.Cog):
     async def _clip_stats(self, handle: str, video: VideoInfo) -> Optional[VideoStats]:
         """Fetch upload date, counters and MP4 URLs for one clip.
 
-        Best effort: the announcement goes out even when this endpoint fails, so
-        an enrichment can never cost a clip alert.
+        The mobile endpoint has the tighter quota and is tried first; when it
+        refuses, the public video page still answers with the numbers, just
+        without an MP4 URL. Best effort either way - the announcement goes out
+        even when both fail, so an enrichment never costs a clip alert.
         """
         try:
             return await self.api.video_stats(video.video_id)
         except TikTokBlocked as exc:
-            log.warning(
-                "TikTokWatch: mobile feed rate limited while enriching %s: %s",
-                handle,
+            log.info(
+                "TikTokWatch: mobile feed rate limited (%s); using the video page for %s",
                 exc,
+                handle,
             )
         except TikTokError as exc:
             log.debug("TikTokWatch: no clip details for %s: %s", video.video_id, exc)
+        try:
+            return await self.api.video_page_stats(video.video_id)
+        except TikTokBlocked as exc:
+            log.warning("TikTokWatch: rate limited while enriching %s: %s", handle, exc)
+        except TikTokError as exc:
+            log.debug(
+                "TikTokWatch: video page has no data for %s: %s", video.video_id, exc
+            )
         return None
 
     async def _send_video(
