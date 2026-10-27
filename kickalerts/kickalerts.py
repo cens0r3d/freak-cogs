@@ -50,6 +50,9 @@ BROWSER_UA = (
 #: Clip poll interval bounds and how many clip ids are remembered per streamer.
 MIN_CLIPS_INTERVAL = 60
 MAX_CLIPS_INTERVAL = 3600
+#: Discord's upload limit for bots is 20 MiB; asking for more only produces a
+#: failed send, so the clip setting is capped there.
+MAX_CLIP_MIB = 20
 SEEN_CLIP_LIMIT = 30
 KICK_COLOR = 0x53FC18
 OFFLINE_COLOR = 0x808080
@@ -456,11 +459,15 @@ def _clamp_interval(seconds: Any) -> int:
 
 
 def _clamp_clip_mb(value: Any) -> int:
-    """Clamp the clip file size setting into 1-25 MB."""
+    """Clamp the clip file size setting into 1-20 MiB.
+
+    MiB, not MB: Discord's 20 MiB limit is 20 * 1024 * 1024 bytes, and a clip
+    measured as "20 MB" in decimal would already be rejected by the upload.
+    """
     megabytes = _as_int(value)
     if megabytes is None:
         return int(DEFAULT_GUILD["clips_max_mb"])
-    return max(1, min(25, megabytes))
+    return max(1, min(MAX_CLIP_MIB, megabytes))
 
 
 def _clamp_clips_interval(seconds: Any) -> int:
@@ -1108,7 +1115,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.4.0"
+    __version__ = "3.4.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1421,7 +1428,9 @@ class KickAlerts(commands.Cog):
     ) -> None:
         """Convert the clip to an MP4 and post it under the embed."""
         guild_limit = _as_int(getattr(guild, "filesize_limit", None))
-        limit = min(max_mb * 1024 * 1024, guild_limit or max_mb * 1024 * 1024)
+        limit = min(max_mb, MAX_CLIP_MIB) * 1024 * 1024
+        if guild_limit:
+            limit = min(limit, guild_limit)
         permissions = channel.permissions_for(guild.me)
         if not permissions.attach_files:
             log.warning(
@@ -2198,18 +2207,18 @@ class KickAlerts(commands.Cog):
             return
         await ctx.send(
             "Clip files are on: every announced clip is converted to MP4 and "
-            f"posted as a file (up to `{ctx.clean_prefix}kickalert clipmax` MB, "
+            f"posted as a file (up to `{ctx.clean_prefix}kickalert clipmax` MiB, "
             "default 20). Clips over the limit are skipped."
         )
 
     @kickalert.command(name="clipmax")
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_clipmax(self, ctx: commands.Context, megabytes: int) -> None:
-        """Largest clip file to attach, in MB (1-25)."""
+        """Largest clip file to attach, in MiB (1-20)."""
         value = _clamp_clip_mb(megabytes)
         await self.config.guild(ctx.guild).clips_max_mb.set(value)
         note = "" if value == megabytes else f" (clamped from {megabytes})"
-        await ctx.send(f"Clip files up to {value} MB are attached{note}.")
+        await ctx.send(f"Clip files up to {value} MiB are attached{note}.")
 
     @kickalert.command(name="clipsset")
     @checks.admin_or_permissions(manage_guild=True)
@@ -2468,7 +2477,7 @@ class KickAlerts(commands.Cog):
             embed.add_field(
                 name="Clip files",
                 value=(
-                    f"MP4 up to {_clamp_clip_mb(data.get('clips_max_mb'))} MB"
+                    f"MP4 up to {_clamp_clip_mb(data.get('clips_max_mb'))} MiB"
                     if data.get("clips_attach", True)
                     else "off"
                 ),

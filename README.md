@@ -98,7 +98,7 @@ Grab API credentials at https://kick.com/settings/developer. Instead of `setcred
 | `[p]kickalert clipsset <username> <true\|false>` | Clip alerts for one streamer |
 | `[p]kickalert clipscheck <username>` | Show the newest clips without posting |
 | `[p]kickalert clipfiles <true\|false>` | Convert the clip with ffmpeg and post the MP4 under the embed (default on) |
-| `[p]kickalert clipmax <1-25>` | Largest clip file in MB (default 20) |
+| `[p]kickalert clipmax <1-20>` | Largest clip file in MiB (default and maximum 20, Discord's bot upload limit) |
 | `[p]kickalert editlive <true\|false>` | Keep refreshing the alert while the stream runs |
 | `[p]kickalert timezone <-12..14>` | Embed timestamp offset for this server |
 | `[p]kickalert toggleviewers <true\|false>` | Show or hide the viewer count |

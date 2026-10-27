@@ -64,9 +64,10 @@ under the announcement, so Discord renders the video with its own download
 button. Measured: a 10 s clip becomes 3.0 MB, a 45 s clip 9.5 MB (h264 720p,
 ~2.3 Mbit/s).
 
-- `[p]kickalert clipmax <1-25>` - size ceiling per file, default 20 MB. Checked
-  against the guild's upload limit too; anything larger is skipped and only the
-  embed is posted.
+- `[p]kickalert clipmax <1-20>` - size ceiling per file in **MiB**, default 20,
+  which is also Discord's upload limit for bots: asking for more only produces a
+  failed send, so the setting is capped there. Checked against the guild's own
+  upload limit too; anything larger is skipped and only the embed is posted.
 - Conversions run one at a time (a backlog should not start ten ffmpeg processes),
   with a 180 s timeout and a 900 s duration cap.
 - ffmpeg missing, a broken playlist, a timeout or a size overrun all cost only
