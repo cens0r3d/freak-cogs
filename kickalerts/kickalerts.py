@@ -699,7 +699,13 @@ class KickAPI:
         status, payload = await self._http_json(
             "GET",
             url,
-            params=(("limit", str(max(1, min(50, limit)))),),
+            params=(
+                ("limit", str(max(1, min(50, limit)))),
+                # Cloudflare answers this endpoint with ``max-age=14400``, so a
+                # repeated poll would read a four-hour-old list. A changing
+                # parameter forces a MISS and therefore a real answer.
+                ("_", str(int(time.time() * 1000))),
+            ),
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
         )
         if status == 429:
@@ -1027,7 +1033,7 @@ def _as_demo_stream(info: StreamInfo) -> StreamInfo:
 class KickAlerts(commands.Cog):
     """Announce Kick.com livestreams in Discord."""
 
-    __version__ = "3.3.0"
+    __version__ = "3.3.1"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
