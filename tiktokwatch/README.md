@@ -62,6 +62,13 @@ An unknown handle answers `statusCode 19881007` on the live endpoint and HTTP
 400 on the embed page; both are reported as "no such account" instead of looking
 like a permanently offline creator.
 
+**Viewer counts can be withheld.** For some accounts TikTok answers with a stub
+room: live status and a room id, but an empty title, no cover, `startTime: 0` and
+`liveRoomStats` full of zeros — even the live page ships `roomInfo: null`. A `0`
+there is "not published", not "nobody watching", so the embed omits the viewer
+field (and the uptime) instead of printing a fake zero. As soon as a real room
+payload arrives, the fields appear.
+
 **A broadcast is identified by a key, not by one field.** The key is built from
 `streamId`, then the stream's start time, then TikTok's room id. Not every live
 room carries a `streamId`: some payloads ship a sparse room with only the viewer

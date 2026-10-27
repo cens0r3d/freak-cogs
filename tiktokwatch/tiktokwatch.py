@@ -299,7 +299,8 @@ class LiveInfo:
     title: Optional[str] = None
     cover_url: Optional[str] = None
     started_at: Optional[datetime] = None
-    viewers: int = 0
+    #: ``None`` when TikTok sent a stub room and withheld the counters.
+    viewers: Optional[int] = None
     stream_id: Optional[int] = None
     room_id: Optional[int] = None
     raw_status: Optional[int] = None
@@ -363,14 +364,17 @@ def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
     data = payload.get("data")
     if not isinstance(data, dict):
         return None
-    user = data.get("user") if isinstance(data.get("user"), dict) else {}
-    room = data.get("liveRoom") if isinstance(data.get("liveRoom"), dict) else {}
+    user_raw = data.get("user")
+    user: Dict[str, Any] = user_raw if isinstance(user_raw, dict) else {}
+    room_raw = data.get("liveRoom")
+    room: Dict[str, Any] = room_raw if isinstance(room_raw, dict) else {}
     status = _as_int(user.get("status"))
     if status is None:
         status = _as_int(room.get("status"))
-    stats = (
-        room.get("liveRoomStats") if isinstance(room.get("liveRoomStats"), dict) else {}
-    )
+    stats_raw = room.get("liveRoomStats")
+    stats: Dict[str, Any] = stats_raw if isinstance(stats_raw, dict) else {}
+    title = _as_text(room.get("title"))
+    cover = _as_text(room.get("coverUrl"))
     started = None
     start_raw = _as_int(room.get("startTime"))
     if start_raw:
@@ -378,13 +382,18 @@ def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
             started = datetime.fromtimestamp(start_raw, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             started = None
+    # Some rooms come back as a stub: live status and a room id, but an empty
+    # title, no cover and startTime 0. Their ``liveRoomStats`` are all zeros too,
+    # so a 0 there is "withheld", not "nobody is watching".
+    stub_room = not title and not cover and not started
+    user_count = _as_int(stats.get("userCount"))
     return LiveInfo(
         handle=handle,
         is_live=status == STATUS_LIVE,
-        title=_as_text(room.get("title")),
-        cover_url=_as_text(room.get("coverUrl")),
+        title=title,
+        cover_url=cover,
         started_at=started,
-        viewers=_as_int(stats.get("userCount")) or 0,
+        viewers=None if stub_room else (user_count or 0),
         stream_id=_as_int(room.get("streamId")),
         room_id=_as_int(user.get("roomId")),
         raw_status=status,
@@ -573,7 +582,7 @@ def build_live_embed(info: LiveInfo, settings: EmbedSettings) -> discord.Embed:
     )
     embed.set_author(name=f"@{info.handle} is live on TikTok", url=info.url)
     lines: List[str] = []
-    if settings.show_viewers:
+    if settings.show_viewers and info.viewers is not None:
         lines.append(f"**Viewers:** {info.viewers:,}")
     started = format_start(info.started_at, settings.tz, settings.hour_format)
     if started:
@@ -739,7 +748,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.2"
+    __version__ = "1.0.3"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1088,7 +1097,7 @@ class TikTokWatch(commands.Cog):
             ):
                 await self._refresh_live(guild, handle, info, settings, channel, state)
                 return "updated"
-            peak = max(_as_int(state.get("peak_viewers")) or 0, info.viewers)
+            peak = max(_as_int(state.get("peak_viewers")) or 0, info.viewers or 0)
             await self._store_account(
                 guild, handle, last_title=info.title, peak_viewers=peak
             )
@@ -1302,7 +1311,7 @@ class TikTokWatch(commands.Cog):
             alert_message_id=message.id,
             last_edit=time.time(),
             last_title=info.title,
-            peak_viewers=info.viewers,
+            peak_viewers=info.viewers or 0,
         )
         log.info("TikTokWatch: announced @%s live in guild %s", handle, guild.id)
         return True
@@ -1341,7 +1350,7 @@ class TikTokWatch(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             log.debug("TikTokWatch: could not refresh the alert for %s", handle)
             return False
-        peak = max(_as_int(state.get("peak_viewers")) or 0, info.viewers)
+        peak = max(_as_int(state.get("peak_viewers")) or 0, info.viewers or 0)
         await self._store_account(
             guild,
             handle,
