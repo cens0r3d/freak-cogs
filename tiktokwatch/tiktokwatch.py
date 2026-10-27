@@ -27,7 +27,7 @@ import logging
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -261,8 +261,8 @@ def render_template(template: str, values: Dict[str, Any]) -> str:
     return TEMPLATE_RE.sub(replace, template)
 
 
-def _json_array_at(text: str, index: int) -> Optional[str]:
-    """Slice a JSON array out of a larger document, quotes and nesting aware."""
+def _json_slice_at(text: str, index: int) -> Optional[str]:
+    """Slice a JSON array/object out of a larger document, quote and nest aware."""
     depth = 0
     in_string = False
     escaped = False
@@ -301,6 +301,7 @@ class LiveInfo:
     started_at: Optional[datetime] = None
     #: ``None`` when TikTok sent a stub room and withheld the counters.
     viewers: Optional[int] = None
+    avatar_url: Optional[str] = None
     stream_id: Optional[int] = None
     room_id: Optional[int] = None
     raw_status: Optional[int] = None
@@ -350,6 +351,40 @@ class VideoInfo:
         return VIDEO_URL.format(handle=handle, video_id=self.video_id)
 
 
+@dataclass(frozen=True)
+class ClipPage:
+    """What one profile embed page carried: clips plus the profile's own face."""
+
+    videos: List[VideoInfo] = field(default_factory=list)
+    avatar_url: Optional[str] = None
+    nickname: Optional[str] = None
+
+
+def parse_clip_page(html: str) -> ClipPage:
+    """Read the clip list and the profile image out of an embed page."""
+    videos = parse_videos(html)
+    if not videos and '"videoList"' not in html:
+        # The page rendered without its embedded JSON: keep the ids we can see.
+        videos = [VideoInfo(video_id=video_id) for video_id in video_ids(html)]
+    avatar = None
+    nickname = None
+    marker = html.find('"userInfo":')
+    if marker != -1:
+        start = html.find("{", marker)
+        blob = _json_slice_at(html, start) if start != -1 else None
+        if blob:
+            try:
+                info = json.loads(blob)
+            except ValueError:
+                info = None
+            if isinstance(info, dict):
+                avatar = _as_text(info.get("avatarThumbUrl")) or _as_text(
+                    info.get("avatarLargerUrl")
+                )
+                nickname = _as_text(info.get("nickname"))
+    return ClipPage(videos=videos, avatar_url=avatar, nickname=nickname)
+
+
 def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
     """Turn an ``api-live/user/room`` payload into a :class:`LiveInfo`.
 
@@ -387,6 +422,11 @@ def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
     # so a 0 there is "withheld", not "nobody is watching".
     stub_room = not title and not cover and not started
     user_count = _as_int(stats.get("userCount"))
+    avatar = (
+        _as_text(user.get("avatarLarger"))
+        or _as_text(user.get("avatarMedium"))
+        or _as_text(user.get("avatarThumb"))
+    )
     return LiveInfo(
         handle=handle,
         is_live=status == STATUS_LIVE,
@@ -394,6 +434,7 @@ def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
         cover_url=cover,
         started_at=started,
         viewers=None if stub_room else (user_count or 0),
+        avatar_url=avatar,
         stream_id=_as_int(room.get("streamId")),
         room_id=_as_int(user.get("roomId")),
         raw_status=status,
@@ -408,7 +449,7 @@ def parse_videos(html: str) -> List[VideoInfo]:
     start = html.find("[", marker)
     if start == -1:
         return []
-    blob = _json_array_at(html, start)
+    blob = _json_slice_at(html, start)
     if not blob:
         return []
     items: Any = None
@@ -532,17 +573,10 @@ class TikTokAPI:
             raise TikTokError("the live endpoint answered with no JSON") from exc
         return parse_live_payload(handle, payload)
 
-    async def recent_videos(self, handle: str) -> List[VideoInfo]:
-        """The clips on a profile's embed page."""
+    async def clip_page(self, handle: str) -> ClipPage:
+        """The clips and the profile image from a profile's embed page."""
         html = await self._text(CONTENT_URL.format(handle=handle))
-        videos = parse_videos(html)
-        if not videos:
-            missing = video_ids(html)
-            if missing and '"videoList"' not in html:
-                # The page rendered, but its embedded JSON is gone: keep the ids
-                # rather than reporting an account with no clips.
-                return [VideoInfo(video_id=video_id) for video_id in missing]
-        return videos
+        return parse_clip_page(html)
 
 
 # --------------------------------------------------------------------------- #
@@ -593,6 +627,8 @@ def build_live_embed(info: LiveInfo, settings: EmbedSettings) -> discord.Embed:
     lines.append("")
     lines.append(f"**[Watch on TikTok]({info.url})**")
     embed.description = "\n".join(lines)
+    if info.avatar_url:
+        embed.set_thumbnail(url=info.avatar_url)
     if info.cover_url:
         embed.set_image(url=info.cover_url)
     embed.set_footer(text="TikTok LIVE")
@@ -600,7 +636,11 @@ def build_live_embed(info: LiveInfo, settings: EmbedSettings) -> discord.Embed:
 
 
 def build_content_embed(
-    handle: str, video: VideoInfo, settings: EmbedSettings
+    handle: str,
+    video: VideoInfo,
+    settings: EmbedSettings,
+    avatar_url: Optional[str] = None,
+    nickname: Optional[str] = None,
 ) -> discord.Embed:
     """The "new clip" announcement embed."""
     url = video.url(handle)
@@ -609,9 +649,17 @@ def build_content_embed(
         url=url,
         timestamp=datetime.now(settings.tz),
     )
-    embed.set_author(
-        name=f"New TikTok from @{handle}", url=PROFILE_URL.format(handle=handle)
-    )
+    author_name = f"New TikTok from @{handle}"
+    if nickname:
+        author_name = f"New TikTok from {nickname} (@{handle})"
+    if avatar_url:
+        embed.set_author(
+            name=author_name,
+            url=PROFILE_URL.format(handle=handle),
+            icon_url=avatar_url,
+        )
+    else:
+        embed.set_author(name=author_name, url=PROFILE_URL.format(handle=handle))
     description = TIKTOK_SPAN.sub("", video.desc or "").strip()
     if len(description) > 900:
         description = description[:897] + "..."
@@ -643,6 +691,8 @@ def build_offline_embed(
         timestamp=datetime.now(settings.tz),
     )
     embed.set_author(name=f"@{info.handle} is offline", url=info.url)
+    if info.avatar_url:
+        embed.set_thumbnail(url=info.avatar_url)
     pretty = format_duration(duration)
     if pretty:
         embed.add_field(name="Duration", value=pretty, inline=True)
@@ -653,7 +703,7 @@ def build_offline_embed(
 def build_status_embed(
     handle: str,
     info: Optional[LiveInfo],
-    videos: Optional[List[VideoInfo]],
+    page: Optional[ClipPage],
     settings: EmbedSettings,
 ) -> discord.Embed:
     """The embed used by ``[p]tiktok check``."""
@@ -673,6 +723,7 @@ def build_status_embed(
     lines = [f"**@{handle}** is not live right now.", ""]
     if info.title:
         lines.append(f"**Last room:** {info.title}")
+    videos = page.videos if page else []
     if videos:
         newest = videos[0]
         lines.append(f"**Latest clip:** {newest.desc or newest.video_id}")
@@ -685,12 +736,15 @@ def build_status_embed(
         description="\n".join(lines),
         timestamp=datetime.now(settings.tz),
     )
+    avatar = (page.avatar_url if page else None) or info.avatar_url
+    if avatar:
+        embed.set_thumbnail(url=avatar)
     embed.set_footer(text="TikTok")
     return embed
 
 
 def build_debug_embed(
-    handle: str, info: Optional[LiveInfo], videos: Optional[List[VideoInfo]]
+    handle: str, info: Optional[LiveInfo], page: Optional[ClipPage]
 ) -> discord.Embed:
     """Raw view for ``[p]tiktok debug``; no cookies or session data are read."""
     embed = discord.Embed(
@@ -711,13 +765,14 @@ def build_debug_embed(
         lines.append(f"**room_id:** {info.room_id}")
         lines.append(f"**cover:** {'yes' if info.cover_url else 'no'}")
     lines.append("")
-    if videos is None:
+    if page is None:
         lines.append("**embed page:** not fetched")
-    elif not videos:
+    elif not page.videos:
         lines.append("**embed page:** no clip list found")
     else:
-        lines.append(f"**embed page:** {len(videos)} clips")
-        for video in videos[:5]:
+        lines.append(f"**embed page:** {len(page.videos)} clips")
+        lines.append(f"**avatar:** {'yes' if page.avatar_url else 'no'}")
+        for video in page.videos[:5]:
             lines.append(
                 f"- `{video.video_id}` plays={video.play_count} desc={(video.desc or '')[:60]}"
             )
@@ -748,7 +803,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.3"
+    __version__ = "1.0.4"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -973,19 +1028,19 @@ class TikTokWatch(commands.Cog):
             result["alerts"] += counts["alerts"]
         return result
 
-    async def _fetch_content(self, handles: List[str]) -> Dict[str, List[VideoInfo]]:
+    async def _fetch_content(self, handles: List[str]) -> Dict[str, ClipPage]:
         """Fetch embed pages concurrently; holds the first block error back."""
-        results: Dict[str, List[VideoInfo]] = {}
+        results: Dict[str, ClipPage] = {}
         blocked: Optional[TikTokBlocked] = None
 
         async def one(handle: str) -> None:
             nonlocal blocked
             try:
-                results[handle] = await self.api.recent_videos(handle)
+                results[handle] = await self.api.clip_page(handle)
             except TikTokBlocked as exc:
                 blocked = blocked or exc
             except TikTokNotFound:
-                results[handle] = []
+                results[handle] = ClipPage()
             except TikTokError as exc:
                 self._last_error = str(exc)
                 log.debug("TikTokWatch: content lookup for %s failed: %s", handle, exc)
@@ -1112,7 +1167,7 @@ class TikTokWatch(commands.Cog):
         self,
         guild: discord.Guild,
         data: Dict[str, Any],
-        pages: Dict[str, List[VideoInfo]],
+        pages: Dict[str, ClipPage],
     ) -> int:
         """Apply one guild's new clips and return how many were announced."""
         settings = EmbedSettings.from_guild_config(data)
@@ -1120,11 +1175,11 @@ class TikTokWatch(commands.Cog):
         for handle, entry in (data.get("accounts") or {}).items():
             if handle not in pages:
                 continue
-            videos = pages[handle]
-            if not videos:
+            page = pages[handle]
+            if not page.videos:
                 continue
             action = await self._handle_content(
-                guild, handle, entry, videos, data, settings
+                guild, handle, entry, page, data, settings
             )
             if action == "announced":
                 announced += 1
@@ -1135,7 +1190,7 @@ class TikTokWatch(commands.Cog):
         guild: discord.Guild,
         handle: str,
         entry: Dict[str, Any],
-        videos: List[VideoInfo],
+        page: ClipPage,
         data: Dict[str, Any],
         settings: EmbedSettings,
     ) -> str:
@@ -1144,6 +1199,7 @@ class TikTokWatch(commands.Cog):
         The embed page lists a pinned clip first, so position zero says nothing
         about age: new content is whatever id is not in the stored set.
         """
+        videos = page.videos
         state = {**ACCOUNT_DEFAULTS, **(entry or {})}
         known = [str(item) for item in (state.get("seen_videos") or [])]
         known_set = set(known)
@@ -1192,7 +1248,13 @@ class TikTokWatch(commands.Cog):
             try:
                 await channel.send(
                     content=content,
-                    embed=build_content_embed(handle, video, settings),
+                    embed=build_content_embed(
+                        handle,
+                        video,
+                        settings,
+                        avatar_url=page.avatar_url,
+                        nickname=page.nickname,
+                    ),
                     allowed_mentions=discord.AllowedMentions(
                         roles=True,
                         everyone=pings_everyone(guild, state.get("ping_role_id")),
@@ -1511,15 +1573,17 @@ class TikTokWatch(commands.Cog):
         # Prime the clip list so the first content pass does not announce the
         # whole profile, and read the live state once for the confirmation.
         note = ""
-        videos: List[VideoInfo] = []
+        page = ClipPage()
         try:
-            videos = await self.api.recent_videos(cleaned)
+            page = await self.api.clip_page(cleaned)
             await self._store_account(
                 ctx.guild,
                 cleaned,
                 primed=True,
-                seen_videos=[video.video_id for video in videos][:SEEN_VIDEO_LIMIT],
-                last_video_id=videos[0].video_id if videos else None,
+                seen_videos=[video.video_id for video in page.videos][
+                    :SEEN_VIDEO_LIMIT
+                ],
+                last_video_id=page.videos[0].video_id if page.videos else None,
             )
         except TikTokBlocked as exc:
             await self._register_block(exc)
@@ -1539,7 +1603,7 @@ class TikTokWatch(commands.Cog):
             status = "handle not found by TikTok"
         await ctx.send(
             f"Now watching `@{cleaned}` ({status})."
-            f"\nClips on the profile: {len(videos)}. Live polls every "
+            f"\nClips on the profile: {len(page.videos)}. Live polls every "
             f"{await self.config.guild(ctx.guild).check_interval()} s, clips every "
             f"{await self.config.guild(ctx.guild).content_interval()} s.{note}"
         )
@@ -1810,15 +1874,15 @@ class TikTokWatch(commands.Cog):
             except TikTokError as exc:
                 await ctx.send(f"The live lookup failed: {exc}")
                 return
-            videos: List[VideoInfo] = []
+            page: Optional[ClipPage] = None
             try:
-                videos = await self.api.recent_videos(cleaned)
+                page = await self.api.clip_page(cleaned)
             except TikTokError:
-                videos = []
+                page = None
         settings = EmbedSettings.from_guild_config(
             await self.config.guild(ctx.guild).all()
         )
-        await ctx.send(embed=build_status_embed(cleaned, info, videos, settings))
+        await ctx.send(embed=build_status_embed(cleaned, info, page, settings))
 
     @tiktok.command(name="test")
     @checks.admin_or_permissions(manage_guild=True)
@@ -1869,10 +1933,10 @@ class TikTokWatch(commands.Cog):
             await ctx.send("That is not a TikTok handle.")
             return
         info: Optional[LiveInfo] = None
-        videos: Optional[List[VideoInfo]] = None
+        page: Optional[ClipPage] = None
         try:
             info = await self.api.live_status(cleaned)
-            videos = await self.api.recent_videos(cleaned)
+            page = await self.api.clip_page(cleaned)
         except TikTokBlocked as exc:
             await self._register_block(exc)
             await ctx.send(f"Blocked: {exc}")
@@ -1880,7 +1944,7 @@ class TikTokWatch(commands.Cog):
         except TikTokError as exc:
             await ctx.send(f"Endpoint error: {exc}")
             return
-        await ctx.send(embed=build_debug_embed(cleaned, info, videos))
+        await ctx.send(embed=build_debug_embed(cleaned, info, page))
 
     @tiktok.command(name="force")
     @checks.is_owner()

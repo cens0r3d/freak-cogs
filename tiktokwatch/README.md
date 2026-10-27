@@ -62,6 +62,14 @@ An unknown handle answers `statusCode 19881007` on the live endpoint and HTTP
 400 on the embed page; both are reported as "no such account" instead of looking
 like a permanently offline creator.
 
+**Images come from the payloads themselves, no extra request.** The live lookup
+carries `user.avatarLarger` (present even in a stub room) and the stream's cover;
+the embed page carries `userInfo.avatarThumbUrl` and the clip cover. Live alerts
+use the cover as the image and the avatar as the thumbnail, new-clip alerts use
+the avatar as the author icon and the clip cover as the image, and the
+end-of-stream embed keeps the avatar. The CDN URLs are signed with an expiry, so
+they are re-read on every poll and never stored.
+
 **Viewer counts can be withheld.** For some accounts TikTok answers with a stub
 room: live status and a room id, but an empty title, no cover, `startTime: 0` and
 `liveRoomStats` full of zeros — even the live page ships `roomInfo: null`. A `0`
