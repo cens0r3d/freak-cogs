@@ -1,0 +1,102 @@
+# TikTokWatch
+
+Announces TikTok livestreams and new clips in Discord — without an API key, a
+login, a developer app or a request signature.
+
+```
+[p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
+[p]cog install freak-cogs tiktokwatch
+[p]load tiktokwatch
+```
+
+The folder, `info.json` and command group carry three different names:
+install/load use **`tiktokwatch`**, `[p]help` shows **TikTokWatch**, and the
+command is **`[p]tiktok`** (alias `[p]ttwatch`).
+
+## Setup
+
+Every account brings its own channel — there is deliberately no guild-wide
+default channel.
+
+```
+[p]tiktok add @handle #alerts        # watch a creator, alerts go to #alerts
+[p]tiktok list                       # what is watched, and where
+[p]tiktok remove @handle
+```
+
+Clipping a profile URL works too: `[p]tiktok add tiktok.com/@handle/video/... #alerts`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `[p]tiktok add <handle> <#channel>` | Watch a creator; all alerts for it go to that channel |
+| `[p]tiktok remove <handle>` | Stop watching |
+| `[p]tiktok list` | Watched accounts, live state and channel |
+| `[p]tiktok toggle <handle>` | Mute or unmute one account (state keeps updating silently) |
+| `[p]tiktok setchannel <handle> <#channel>` | Move one account's alerts |
+| `[p]tiktok setrole <handle> [@role]` | Role pinged for that account (omit to clear) |
+| `[p]tiktok message <handle> [text]` | Custom line above the alert; `{handle} {title} {url} {viewers} {started}` |
+| `[p]tiktok interval live\|content <seconds>` | Poll interval (live 30–3600 s, clips 120–7200 s) |
+| `[p]tiktok alerts live\|content\|all <on\|off>` | Turn a kind of announcement on or off |
+| `[p]tiktok offline new\|edit\|delete` | What happens when a stream ends |
+| `[p]tiktok settings` | Current configuration |
+| `[p]tiktok check <handle>` | Probe TikTok right now (live state + latest clip) |
+| `[p]tiktok test <handle>` | Post a sample live alert, nothing is stored |
+| `[p]tiktok debug <handle>` | Raw endpoint data (owner only) |
+| `[p]tiktok force` | Run a live and a content pass immediately (owner only) |
+
+Defaults: live alerts every 90 s, clip alerts every 600 s, both on, live embed
+refreshed every 300 s, stream end posted as a fresh embed with the duration.
+
+## Data source
+
+Two endpoints of the public web frontend, both keyless:
+
+| Purpose | Request | Fields used |
+| --- | --- | --- |
+| Live state | `GET https://www.tiktok.com/api-live/user/room/?aid=1988&uniqueId=<handle>&sourceType=54` | `data.user.status` (`2` live, `4` offline), `liveRoom.title`, `startTime`, `streamId`, `coverUrl`, `liveRoomStats.userCount` |
+| New clips | `GET https://www.tiktok.com/embed/@<handle>` | embedded `videoList[]` → `id`, `desc`, `coverUrl`, `playCount` |
+
+An unknown handle answers `statusCode 19881007` on the live endpoint and HTTP
+400 on the embed page; both are reported as "no such account" instead of looking
+like a permanently offline creator.
+
+**New clips are detected by id, never by position.** The `videoList` array starts
+with the profile's *pinned* clip, which can be months old — announcing index 0
+would repost an old video on every poll. Each account keeps the last 30 ids.
+The first clip scan after `add` is silent on purpose; `[p]tiktok add` primes the
+list when the account is added.
+
+## Rate limiting and proxies
+
+The two endpoints tolerate a normal polling load from a single server IP: 30
+parallel live lookups from a datacenter IP answer 200 in 0.5 s total. Higher
+pressure is real though — after a few hundred requests within minutes the embed
+page started answering **HTTP 429**. The cog reacts instead of hammering:
+
+- `403`/`429` parks both loops for a window that grows with each consecutive
+  block (30 s × streak, capped at 15 min), stored in Config so a restart does not
+  reset it.
+- Requests run with a concurrency limit of 4 and jitter of ±5–8 % per pass.
+- `[p]tiktok settings` shows the remaining back-off and the reason.
+
+Proxies are **not** required for the designed load (a handful of accounts polled
+once or twice a minute). They become necessary for hundreds of accounts, for
+sub-30-second intervals, or for reading live *chat* (which needs the WebSocket
+and a signing service, not these endpoints).
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| "no-channel", no alerts | The account's channel was deleted or never set: `[p]tiktok setchannel <handle> <#channel>` |
+| "handle not found" in `list` | Typo, or the account cannot go live. Re-add it with the exact handle from the profile URL |
+| Nothing posted, `settings` shows a back-off | TikTok is rate limiting; wait it out or raise the intervals |
+| Live alert appears twice | The creator restarted the stream between two polls — a new `streamId` counts as a new broadcast |
+| A clip was never announced | The first scan is silent by design; the clip list was primed at `add` time |
+| Alerts work but no ping | `[p]tiktok setrole <handle> @role`; the bot needs Mention @everyone for the default role |
+
+Data: only guild-level configuration in Red's Config — channel and role IDs,
+intervals, per-account settings, the last known live state and the last 30 clip
+ids. Nothing about individual Discord users is stored.

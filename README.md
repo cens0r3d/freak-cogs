@@ -114,6 +114,46 @@ Notes:
 - Deleting the alerts channel while it is configured clears the reference automatically.
 - Upgrading from 2.x: existing settings and monitored streamers are kept. Credentials stored with the old config keys are moved into Red's shared `kick` token store on the first start, and the old keys are cleared.
 
+### tiktokwatch
+
+Announces TikTok livestreams and new clips. TikTok has no public API for this, so the cog reads two keyless endpoints of the web frontend: `/api-live/user/room/` for the live state (`data.user.status` `2` vs `4`, plus title, start time, cover and viewer count) and `/embed/@handle` for the clip list. No API key, no login, no session cookie, no request signature.
+
+Setup — every account brings its own channel, there is no guild-wide default:
+
+```
+[p]tiktok add @handle #alerts
+[p]tiktok list
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]tiktok add <handle> <#channel>` | Watch a creator; its alerts go to that channel |
+| `[p]tiktok remove <handle>` | Stop watching |
+| `[p]tiktok list` | Watched accounts, live state and channel |
+| `[p]tiktok toggle <handle>` | Mute or unmute one account |
+| `[p]tiktok setchannel <handle> <#channel>` | Move one account's alerts |
+| `[p]tiktok setrole <handle> [@role]` | Role pinged for that account |
+| `[p]tiktok message <handle> [text]` | Custom line — `{handle}` `{title}` `{url}` `{viewers}` `{started}` |
+| `[p]tiktok interval <live\|content> <seconds>` | Poll interval (live 30–3600, clips 120–7200) |
+| `[p]tiktok alerts <live\|content\|all> <on\|off>` | Turn a kind of announcement on or off |
+| `[p]tiktok offline <new\|edit\|delete>` | Stream end: fresh summary, edit the alert, or delete it |
+| `[p]tiktok settings` | Show this server's configuration |
+| `[p]tiktok check <handle>` | Look a handle up right now, without alerting |
+| `[p]tiktok test <handle>` | Post a sample live alert |
+| `[p]tiktok debug <handle>` | Raw endpoint data (bot owner) |
+| `[p]tiktok force` | Run a live and a content pass right now (bot owner) |
+
+Notes:
+
+- **New clips are detected by id, never by position.** The clip list starts with the profile's pinned video, which can be months old; announcing index 0 would repost an old clip on every poll. Each account remembers the last 30 ids, and the first scan after `add` is silent on purpose.
+- A stream is identified by its `streamId`, so a restart, a missed tick or a flapping endpoint never double-posts. A creator restarting the stream is a new broadcast and announces again.
+- Rate limits are handled, not ignored: `403`/`429` parks both loops for a window that grows with each consecutive block (30 s × streak, capped at 15 min), and `settings` shows the remaining time. Measured from one datacenter IP: 30 parallel live lookups answer in 0.5 s; after a few hundred requests the embed page did answer `429` — the cog backs off instead of retrying immediately.
+- No proxy is needed for a handful of accounts. Hundreds of accounts, sub-30-second intervals or reading live chat (WebSocket + signing service) are different stories.
+- Live alert embeds are refreshed while a stream runs; the end of a stream posts a summary with the duration and removes the stale live alert, so nothing in the channel keeps claiming the stream is live.
+- Times are formatted server-side in the configured UTC offset, so a 24-hour clock actually appears as one.
+
+- Full manual: [`tiktokwatch/README.md`](tiktokwatch/README.md).
+
 ### voicesay
 
 Sends an attached audio file as a native Discord voice message, to a text channel or a DM.

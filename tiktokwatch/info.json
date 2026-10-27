@@ -1,0 +1,22 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Thank you for installing TikTokWatch!\n\nThis cog needs no API key, no login and no TikTok developer app: it reads two public endpoints of the TikTok web frontend (the live room lookup and the profile's embed page).\n\nSetup: `[p]tiktok setchannel #channel` for the default alert channel, then `[p]tiktok add @handle` for every creator you want to watch. `[p]tiktok list` shows what is watched, `[p]tiktok check @handle` probes TikTok right now, and `[p]tiktok settings` explains the rest.\n\nAlerts announce a livestream when it starts, keep the live embed updated while it runs, and report the stream end with its duration. New clips are announced as their own embed. A handle can be muted with `[p]tiktok toggle`.\n\nData: only guild-level configuration (channel and role IDs, intervals, per-account settings and the last known state) is stored in Red's Config. Nothing about individual Discord users is stored.",
+    "name": "TikTokWatch",
+    "short": "TikTok livestream and new-clip announcements without an API key.",
+    "description": "Monitor TikTok creators through two public endpoints of the web frontend that answer without a login, a session cookie or a request signature: the live-room lookup and the profile embed page. Announces livestreams when they start, keeps the live embed updated with viewer counts, reports the stream end with its duration, and announces new clips. Detects new clips by id instead of position, so a pinned video is never mistaken for a new upload. Handles rate limiting with a growing back-off window, supports per-account channels and ping roles, custom messages with placeholders, adjustable poll intervals and a mute switch per account.",
+    "end_user_data_statement": "This cog stores guild-level configuration (alert channel and role IDs, poll intervals, per-account settings and the last known live/clip state) in Red's Config. No message content and no per-user data is stored.",
+    "requirements": [],
+    "tags": [
+        "tiktok",
+        "livestream",
+        "notification",
+        "alert",
+        "social"
+    ],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
