@@ -138,6 +138,9 @@ ACCOUNT_DEFAULTS: Dict[str, Any] = {
     "is_live": False,
     "stream_id": None,
     "stream_key": None,
+    #: Every identifier the current broadcast answered with (see
+    #: :func:`classify_broadcast`): TikTok may switch payload shapes mid-stream.
+    "stream_keys": [],
     "announced_at": None,
     "room_id": None,
     "started_at": None,
@@ -344,22 +347,29 @@ class LiveInfo:
         return LIVE_URL.format(handle=self.handle)
 
     @property
-    def stream_key(self) -> Optional[str]:
-        """A key that identifies this broadcast, from whatever TikTok sent.
+    def stream_keys(self) -> List[str]:
+        """Every identifier this broadcast can be recognised by.
 
-        Not every live room carries ``streamId``: some payloads ship a sparse
-        ``liveRoom`` with only the viewer count, and a missing id used to look
-        like a brand-new broadcast on every poll - one alert per interval. The
-        start time and the current room id are equally per-broadcast, so the key
-        falls back through them.
+        Not every live room carries ``streamId``: TikTok answers the same
+        broadcast either with the full room (``streamId``, ``startTime``) or
+        with a sparse stub that only has the room id, and it switches between
+        the two from poll to poll. Each of those values is a valid alias for the
+        same broadcast, so all of them are collected and compared as a set.
         """
+        keys: List[str] = []
         if self.stream_id:
-            return f"stream:{self.stream_id}"
+            keys.append(f"stream:{self.stream_id}")
         if self.started_at is not None:
-            return f"start:{int(self.started_at.timestamp())}"
+            keys.append(f"start:{int(self.started_at.timestamp())}")
         if self.room_id:
-            return f"room:{self.room_id}"
-        return None
+            keys.append(f"room:{self.room_id}")
+        return keys
+
+    @property
+    def stream_key(self) -> Optional[str]:
+        """The most specific identifier of this broadcast, for logs and state."""
+        keys = self.stream_keys
+        return keys[0] if keys else None
 
     @property
     def uptime(self) -> Optional[timedelta]:
@@ -606,6 +616,78 @@ def parse_live_payload(handle: str, payload: Any) -> Optional[LiveInfo]:
         room_id=_as_int(user.get("roomId")),
         raw_status=status,
     )
+
+
+#: Order in which a broadcast identifier is trusted, most specific first.
+STREAM_KEY_RANKS = ("stream", "start", "room")
+
+
+def stream_key_kind(key: str) -> str:
+    """The identifier type of one stream key (``stream``, ``start``, ``room``)."""
+    return str(key).split(":", 1)[0]
+
+
+def account_stream_keys(state: Dict[str, Any]) -> List[str]:
+    """The broadcast aliases remembered for one account.
+
+    ``stream_keys`` is the current shape; ``stream_key`` is the single-value
+    form older states were written with, and is folded in as one alias.
+    """
+    raw = state.get("stream_keys")
+    keys: List[str] = []
+    if isinstance(raw, list):
+        keys = [str(key) for key in raw if key]
+    legacy = state.get("stream_key")
+    if legacy and str(legacy) not in keys:
+        keys.append(str(legacy))
+    return keys
+
+
+def merge_stream_keys(stored: List[str], current: List[str]) -> List[str]:
+    """Union of the aliases, one per identifier kind, most specific first."""
+    merged: Dict[str, str] = {}
+    for key in [*current, *stored]:
+        merged.setdefault(stream_key_kind(key), str(key))
+    return sorted(
+        merged.values(),
+        key=lambda key: (
+            STREAM_KEY_RANKS.index(stream_key_kind(key))
+            if stream_key_kind(key) in STREAM_KEY_RANKS
+            else len(STREAM_KEY_RANKS)
+        ),
+    )
+
+
+def classify_broadcast(
+    stored: List[str], current: List[str], was_live: bool
+) -> str:
+    """Decide what one poll means for a handle: ``announce``, ``learn``, ``same``.
+
+    ``announce`` - a broadcast we have not seen yet.
+    ``learn``    - same broadcast, but it showed an identifier we did not know;
+                   remember it and stay quiet.
+    ``same``     - nothing new.
+
+    A single broadcast can be answered with different payload shapes, so the
+    missing-match case only counts as a restart when a *known* identifier of the
+    same kind now carries a different value. An identifier type we have never
+    seen for this broadcast is learned, never announced: that asymmetry is what
+    stops one stream from producing one alert per poll.
+    """
+    if not current:
+        return "same"
+    if not was_live:
+        return "announce"
+    if not stored:
+        return "learn"
+    stored_set = set(stored)
+    current_set = set(current)
+    if current_set & stored_set:
+        return "same" if stored_set >= current_set else "learn"
+    known_kinds = {stream_key_kind(key) for key in stored_set}
+    if any(stream_key_kind(key) in known_kinds for key in current_set):
+        return "announce"
+    return "learn"
 
 
 def parse_videos(html: str) -> List[VideoInfo]:
@@ -1060,7 +1142,7 @@ def fake_live(info: LiveInfo) -> LiveInfo:
 class TikTokWatch(commands.Cog):
     """Announce TikTok livestreams and new clips in Discord."""
 
-    __version__ = "1.0.8"
+    __version__ = "1.0.9"
 
     def __init__(self, bot: Red) -> None:
         self.bot = bot
@@ -1378,6 +1460,7 @@ class TikTokWatch(commands.Cog):
                 is_live=info.is_live,
                 stream_id=info.stream_id,
                 stream_key=info.stream_key,
+                stream_keys=list(info.stream_keys),
                 room_id=info.room_id,
                 last_title=info.title,
             )
@@ -1386,23 +1469,24 @@ class TikTokWatch(commands.Cog):
         if channel is None:
             return "no-channel"
         was_live = bool(state.get("is_live"))
-        stored_key = state.get("stream_key")
-        current_key = info.stream_key
-        new_broadcast = False
+        stored_keys = account_stream_keys(state)
+        current_keys = info.stream_keys
         if info.is_live:
-            if not was_live:
-                new_broadcast = True
-            elif stored_key is None:
-                # Either state written before stream keys existed, or a room
-                # that hides its ids: remember the key, do not post twice.
-                await self._store_account(guild, handle, stream_key=current_key)
-            elif current_key is not None and current_key != stored_key:
-                new_broadcast = True  # a genuine restart of the stream
-        if info.is_live and new_broadcast:
-            delivered = await self._announce_live(
-                guild, handle, info, settings, channel, state, data
-            )
-            return "announced" if delivered else "no-permission"
+            verdict = classify_broadcast(stored_keys, current_keys, was_live)
+            if verdict == "learn":
+                # Same broadcast in a different payload shape: keep the aliases
+                # so the next poll recognises it, and stay quiet.
+                await self._store_account(
+                    guild,
+                    handle,
+                    stream_key=info.stream_key,
+                    stream_keys=merge_stream_keys(stored_keys, current_keys),
+                )
+            elif verdict == "announce":
+                delivered = await self._announce_live(
+                    guild, handle, info, settings, channel, state, data
+                )
+                return "announced" if delivered else "no-permission"
         if info.is_live:
             if bool(data.get("edit_live_alerts", True)) and self._needs_refresh(
                 state, info, _clamp(data.get("live_update_seconds"), 60, 3600, 300)
@@ -1708,6 +1792,7 @@ class TikTokWatch(commands.Cog):
             is_live=True,
             stream_id=info.stream_id,
             stream_key=info.stream_key,
+            stream_keys=list(info.stream_keys),
             room_id=info.room_id,
             announced_at=time.time(),
             started_at=info.started_at.isoformat() if info.started_at else None,
@@ -1822,6 +1907,7 @@ class TikTokWatch(commands.Cog):
             is_live=False,
             stream_id=None,
             stream_key=None,
+            stream_keys=[],
             announced_at=None,
             started_at=None,
             alert_message_id=None,

@@ -81,12 +81,17 @@ there is "not published", not "nobody watching", so the embed omits the viewer
 field (and the uptime) instead of printing a fake zero. As soon as a real room
 payload arrives, the fields appear.
 
-**A broadcast is identified by a key, not by one field.** The key is built from
-`streamId`, then the stream's start time, then TikTok's room id. Not every live
-room carries a `streamId`: some payloads ship a sparse room with only the viewer
-count, and checking the id alone would treat that as a brand-new broadcast on
-every poll — one alert per interval. A creator genuinely restarting is a new key
-and announces again; an unknown key never re-announces on its own.
+**A broadcast is identified by an alias set, not by one field.** Every identifier
+TikTok can answer with is remembered for the running broadcast: `streamId`, then
+the stream's start time, then the room id. Not every poll carries all three —
+the same stream is answered either as a full room or as a sparse stub with only
+the room id, and TikTok switches shapes from poll to poll. Comparing one string
+therefore flipped between `stream:…` and `room:…` and posted a new alert each
+time the shape changed (observed: one alert per 90 s poll). So a poll that shows
+an identifier *kind* the broadcast has not shown yet is learned and stays silent;
+only a known kind with a different value is a restart and announces. A creator
+genuinely restarting gets a new room and a new `streamId`, so the alert still
+fires. An offline stream clears the aliases.
 
 **New clips are detected by id, never by position.** The `videoList` array starts
 with the profile's *pinned* clip, which can be months old — announcing index 0
@@ -142,7 +147,7 @@ and a signing service, not these endpoints).
 | "no-channel", no alerts | The account's channel was deleted or never set: `[p]tiktok setchannel <handle> <#channel>` |
 | "handle not found" in `list` | Typo, or the account cannot go live. Re-add it with the exact handle from the profile URL |
 | Nothing posted, `settings` shows a back-off | TikTok is rate limiting; wait it out or raise the intervals |
-| Live alert appears twice | The creator really restarted the stream (a new broadcast key counts as new), or the account sits in two guilds |
+| Live alert appears twice within minutes | Fixed in 1.0.9: TikTok answered the same stream with and without `streamId`, so the broadcast key flipped and every poll looked like a restart. Update the cog (`[p]cog update tiktokwatch`) and reload it |
 | A clip was never announced | The first scan is silent by design; the clip list was primed at `add` time |
 | Alerts work but no ping | `[p]tiktok setrole <handle> @role`; the bot needs Mention @everyone for the default role |
 
