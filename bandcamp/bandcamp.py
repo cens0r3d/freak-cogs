@@ -1564,6 +1564,29 @@ class Bandcamp(commands.Cog):
         view.message = message
         return True
 
+    def _announcement_channel(self, ctx: commands.Context) -> Optional[Any]:
+        """Where to announce when nothing is configured yet: this channel.
+
+        A thread cannot be stored — polling resolves the id with ``get_channel``,
+        which does not return threads — so its parent is taken instead. The
+        channel is only used when the bot may actually post there.
+        """
+        channel: Any = getattr(ctx, "channel", None)
+        parent = getattr(channel, "parent", None)
+        if parent is not None and hasattr(parent, "permissions_for"):
+            channel = parent
+        if channel is None or not hasattr(channel, "permissions_for"):
+            return None
+        guild = getattr(channel, "guild", None) or getattr(ctx, "guild", None)
+        me = getattr(guild, "me", None)
+        if me is None:
+            return None
+        with contextlib.suppress(Exception):
+            permissions = channel.permissions_for(me)
+            if permissions.send_messages and permissions.embed_links:
+                return channel
+        return None
+
     async def _watch_summary(self, guild: discord.Guild) -> discord.Embed:
         """The current watchlist as a card."""
         settings = await self.config.guild(guild).all()
@@ -1761,6 +1784,13 @@ class Bandcamp(commands.Cog):
         await self.config.guild(ctx.guild).watch.set(watch)
         settings = await self.config.guild(ctx.guild).all()
         channel_id = settings.get("watch_channel")
+        adopted = False
+        if not channel_id:
+            fallback = self._announcement_channel(ctx)
+            if fallback is not None:
+                await self.config.guild(ctx.guild).watch_channel.set(fallback.id)
+                channel_id = fallback.id
+                adopted = True
         embed = discord.Embed(
             title=f"Following {_label(artist.name, 100)}",
             description=(
@@ -1774,12 +1804,16 @@ class Bandcamp(commands.Cog):
         if getattr(artist, "image_url", None):
             embed.set_thumbnail(url=artist.image_url)
         if channel_id:
-            embed.add_field(name="Announcements", value=f"<#{channel_id}>", inline=True)
+            embed.add_field(
+                name="Announcements",
+                value=f"<#{channel_id}>" + (" — this channel" if adopted else ""),
+                inline=True,
+            )
         else:
             embed.add_field(
                 name="Announcements",
                 value=(
-                    "nowhere yet — "
+                    "nowhere yet — I cannot post embeds here, use "
                     f"`{ctx.clean_prefix}bandcamp notifications channel #channel`"
                 ),
                 inline=True,
