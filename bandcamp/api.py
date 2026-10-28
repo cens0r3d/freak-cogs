@@ -56,6 +56,12 @@ BASE_URL = "https://bandcamp.com/api"
 #: One page of a tracklist field, Discord allows 1024 characters per field.
 TRACKLIST_BUDGET = 1000
 
+#: Discord lets a bot upload 20 MiB per file; that is the hard ceiling for a
+#: track posted as an attachment (a 128 kbps stream is ~17 KB/s ≈ 1 MiB/min).
+MAX_AUDIO_MIB = 20
+DEFAULT_PLAY_MIB = 8
+PLAY_CEILING_BYTES = MAX_AUDIO_MIB * 1024 * 1024
+
 
 class BandcampError(Exception):
     """An expected failure, carrying a message that can be shown to a user."""
@@ -79,6 +85,15 @@ class UpstreamError(Exception):
     def __init__(self, message: str, status: Optional[int] = None) -> None:
         super().__init__(message)
         self.status = status
+
+
+class AudioTooLarge(Exception):
+    """A track does not fit into the upload budget."""
+
+    def __init__(self, size: int, cap: int) -> None:
+        super().__init__(f"audio is {size} bytes, cap is {cap}")
+        self.size = size
+        self.cap = cap
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +321,20 @@ def band_image_url(image_id: Any) -> Optional[str]:
 def track_art_url(art_id: Any) -> Optional[str]:
     """Cover URL for a release id from the discography endpoint."""
     return cover_url(art_id)
+
+
+def audio_filename(artist: Any, title: Any, limit: int = 110) -> str:
+    """``Artist - Title.mp3``, with the characters Discord rejects replaced.
+
+    Windows and Discord both choke on ``\\ / : * ? " < > |``; the name is what
+    the client shows above the player, so it keeps the artist and the title.
+    """
+    base = f"{artist or 'Unknown artist'} - {title or 'Untitled'}"
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", base).strip(" .")
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit].rstrip(" .")
+    return f"{cleaned or 'track'}.mp3"
 
 
 # --------------------------------------------------------------------------
@@ -684,6 +713,14 @@ def _tag_names(raw_tags: Any) -> List[str]:
     return names
 
 
+def _int_or_zero(raw: Optional[str]) -> int:
+    """A header value as an int, or ``0`` when it is missing or odd."""
+    try:
+        return int(raw or "")
+    except (TypeError, ValueError):
+        return 0
+
+
 def _retry_after(raw: Optional[str]) -> Optional[int]:
     """``Retry-After`` as seconds, or ``None`` when it is missing or odd."""
     try:
@@ -928,6 +965,41 @@ class BandcampClient:
             label=data.get("label") or None,
         )
 
+    # -- audio ------------------------------------------------------------
+    async def fetch_audio(self, url: str, *, max_bytes: int) -> Tuple[bytes, str]:
+        """Stream one preview MP3 into memory, refusing anything over the cap.
+
+        The signed ``stream_redirect`` link answers a 302 to a CDN host, so the
+        declared ``Content-Length`` is checked before the body and the running
+        length during it: the header is a claim, not a guarantee.
+        """
+        session = self._session
+        headers = {"User-Agent": self._user_agent, "Accept": "audio/mpeg,*/*"}
+        async with session.get(url, headers=headers, timeout=self._timeout) as response:
+            if response.status == 429:
+                raise RateLimitError(
+                    "Bandcamp rate limit",
+                    retry_after=_retry_after(response.headers.get("Retry-After")),
+                )
+            if response.status == 404:
+                raise NotFoundError("That stream is gone")
+            if response.status >= 400:
+                raise UpstreamError(
+                    f"Bandcamp answered HTTP {response.status}", status=response.status
+                )
+            declared = _int_or_zero(response.headers.get("Content-Length"))
+            if declared > max_bytes:
+                raise AudioTooLarge(declared, max_bytes)
+            buffer = bytearray()
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    raise AudioTooLarge(len(buffer), max_bytes)
+            content_type = response.headers.get("Content-Type") or "audio/mpeg"
+        if not buffer:
+            raise UpstreamError("Bandcamp sent an empty file")
+        return bytes(buffer), content_type
+
     # -- artists ----------------------------------------------------------
     async def get_artist(self, band_id: Any) -> Artist:
         """An artist or label profile."""
@@ -1013,6 +1085,13 @@ class Resolved:
     from_url: bool = False
 
 
+def _size(num_bytes: int) -> str:
+    """Bytes as ``783 KiB`` or ``8.0 MiB``, whichever reads better."""
+    if num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.0f} KiB"
+    return f"{num_bytes / (1024 * 1024):.1f} MiB"
+
+
 def _friendly(error: BaseException) -> str:
     """A sentence for a failed Bandcamp call."""
     if isinstance(error, NotFoundError):
@@ -1022,6 +1101,12 @@ def _friendly(error: BaseException) -> str:
         if wait:
             return f"Bandcamp is rate limiting the bot. Try again in about {int(wait)} seconds."
         return "Bandcamp is rate limiting the bot. Try again in a minute."
+    if isinstance(error, AudioTooLarge):
+        return (
+            f"That track is about {_size(error.size)} and the upload cap here is "
+            f"{_size(error.cap)} — too long to post as a file. "
+            "Open it on Bandcamp instead."
+        )
     if isinstance(error, UpstreamError):
         return f"{error}. Try again later."
     if isinstance(error, TimeoutError):
@@ -1054,6 +1139,7 @@ class BandcampService:
             NotFoundError,
             RateLimitError,
             UpstreamError,
+            AudioTooLarge,
             aiohttp.ClientError,
             TimeoutError,
         ) as error:
@@ -1137,6 +1223,34 @@ class BandcampService:
     async def album_lyrics(self, artist_id: Any, album_id: Any) -> Album:
         """A release with the lyrics of every track filled in."""
         return await self.album(artist_id, album_id, with_lyrics=True)
+
+    async def audio(
+        self,
+        artist_id: Any,
+        track_id: Any,
+        *,
+        max_bytes: int = DEFAULT_PLAY_MIB * 1024 * 1024,
+    ) -> Tuple[Track, bytes, str]:
+        """The preview MP3 of one track, freshly signed.
+
+        The link inside a cached album payload is signed with a timestamp, so a
+        play always re-reads the track (one cheap request) instead of trusting
+        an answer that can be half an hour old.
+        """
+        track = await self._track(artist_id, track_id)
+        url = (track.streaming_url or {}).get("mp3-128")
+        if not url:
+            raise BandcampError(
+                "Bandcamp has no preview for this track — the artist hid it "
+                "from streaming (common on preorders)."
+            )
+        data, content_type = await self._call(
+            self.client.fetch_audio(url, max_bytes=max_bytes)
+        )
+        return track, data, content_type
+
+    async def _track(self, artist_id: Any, track_id: Any) -> Track:
+        return await self._call(self.client.get_track(artist_id, track_id))
 
     # -- resolving --------------------------------------------------------
     async def resolve(self, text: str, kind: Optional[str] = None) -> Resolved:

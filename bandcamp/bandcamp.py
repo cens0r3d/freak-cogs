@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 import aiohttp
@@ -31,11 +33,14 @@ from redbot.core import Config, checks, commands
 from redbot.core.bot import Red
 
 from .api import (
+    DEFAULT_PLAY_MIB,
     KIND_ALBUM,
     KIND_ARTIST,
     KIND_TRACK,
+    MAX_AUDIO_MIB,
     BandcampError,
     BandcampService,
+    audio_filename,
     collect_bandcamp_urls,
     format_date,
     format_discography_date,
@@ -69,6 +74,10 @@ CID_SEARCH_PICK = "bandcamp:list_pick"
 CID_PAGE_PREV = "bandcamp:page_prev"
 CID_PAGE_NEXT = "bandcamp:page_next"
 CID_BACK = "bandcamp:back"
+CID_PLAY_TRACK = "bandcamp:play_track"
+CID_PLAY_ONE = "bandcamp:play_one"
+#: A select menu holds 25 options, so a longer tracklist needs a second menu.
+PLAY_OPTIONS_PER_MENU = 25
 
 KIND_EMOJI = {KIND_ARTIST: "🎤", KIND_ALBUM: "💿", KIND_TRACK: "🎵"}
 
@@ -173,6 +182,23 @@ def error_embed(
 # --------------------------------------------------------------------------
 # embed builders
 # --------------------------------------------------------------------------
+
+
+@dataclass
+class Detail:
+    """A rendered detail page plus what its playback controls may act on."""
+
+    pages: List[discord.Embed]
+    link: Optional[str] = None
+    album: Optional[Any] = None
+    track: Optional[Any] = None
+
+    @property
+    def playable(self) -> List[Any]:
+        """The tracks the view offers to play."""
+        if self.track is not None:
+            return [self.track]
+        return list(getattr(self.album, "tracks", None) or [])
 
 
 def _artist_of(release: Any) -> Any:
@@ -501,6 +527,7 @@ def build_help_embed(prefix: str, colour: discord.Colour) -> discord.Embed:
         f"`{prefix}bandcamp track <query|link>` — one track",
         f"`{prefix}bandcamp artist <query|link>` — profile and release count",
         f"`{prefix}bandcamp discography <artist>` — every release, pickable",
+        f"`{prefix}bandcamp play <query|link>` — post a track as a playable file",
         f"`{prefix}bandcamp lyrics <query|link>` — lyrics of a track or album",
         f"`{prefix}bandcamp link <url>` — whatever that link points at",
         f"`{prefix}bandcamp autoembed` — answer pasted links automatically",
@@ -529,6 +556,7 @@ class PlaceholderView(discord.ui.View):
             (CID_PAGE_PREV, "‹ Previous", discord.ButtonStyle.secondary),
             (CID_PAGE_NEXT, "Next ›", discord.ButtonStyle.secondary),
             (CID_BACK, "‹ Back", discord.ButtonStyle.secondary),
+            (CID_PLAY_ONE, "▶ Play", discord.ButtonStyle.success),
         ):
             button = discord.ui.Button(label=label, style=style, custom_id=custom_id)
             button.callback = self._expired
@@ -541,6 +569,14 @@ class PlaceholderView(discord.ui.View):
         )
         select.callback = self._expired
         self.add_item(select)
+        play = discord.ui.Select(
+            custom_id=CID_PLAY_TRACK,
+            placeholder="▶ Play a track",
+            options=[discord.SelectOption(label="—", value="none")],
+            disabled=True,
+        )
+        play.callback = self._expired
+        self.add_item(play)
 
     async def _expired(self, interaction: discord.Interaction) -> None:
         with contextlib.suppress(discord.HTTPException):
@@ -681,6 +717,8 @@ class PageView(discord.ui.View):
         *,
         link: Optional[str] = None,
         back: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+        play: Sequence[Any] = (),
+        on_play: Optional[Callable[[discord.Interaction, Any], Awaitable[None]]] = None,
         extras: Sequence[discord.ui.Item] = (),
         timeout: int = VIEW_TIMEOUT,
     ) -> None:
@@ -691,6 +729,8 @@ class PageView(discord.ui.View):
         self.message: Optional[discord.Message] = None
         for item in extras:
             self.add_item(item)
+        if play and on_play is not None:
+            self._add_play_controls(list(play), on_play)
         self._prev: Optional[discord.ui.Button] = None
         self._next: Optional[discord.ui.Button] = None
         self._back = back
@@ -724,6 +764,79 @@ class PageView(discord.ui.View):
                 )
             )
         self._sync()
+
+    def _add_play_controls(
+        self,
+        tracks: Sequence[Any],
+        on_play: Callable[[discord.Interaction, Any], Awaitable[None]],
+    ) -> None:
+        """One Play button for a single track, select menus for a tracklist.
+
+        A button per tracklist row is not possible: Discord caps a message at 25
+        components, a label at 80 characters, and five components per row — so a
+        13-track album would spend all five rows on numbered buttons whose
+        meaning lives in the text above them. A menu carries the titles instead.
+        """
+        if len(tracks) == 1:
+            track = tracks[0]
+
+            async def play_one(interaction: discord.Interaction) -> None:
+                await on_play(interaction, track)
+
+            button = discord.ui.Button(
+                label="▶ Play",
+                style=discord.ButtonStyle.success,
+                custom_id=CID_PLAY_ONE,
+            )
+            button.callback = play_one
+            self.add_item(button)
+            return
+        for menu_index, start in enumerate(
+            range(0, len(tracks), PLAY_OPTIONS_PER_MENU)
+        ):
+            chunk = list(tracks[start : start + PLAY_OPTIONS_PER_MENU])
+            options: List[discord.SelectOption] = []
+            for offset, track in enumerate(chunk):
+                number = getattr(track, "track_number", 0) or start + offset + 1
+                label = truncate(
+                    f"{int(number):02d} · {getattr(track, 'title', '') or 'Untitled'}",
+                    100,
+                )
+                description = format_duration(getattr(track, "duration", None))
+                if not getattr(track, "streaming_url", None):
+                    description += " · no preview"
+                options.append(
+                    discord.SelectOption(
+                        label=label,
+                        description=truncate(description, 100),
+                        value=str(start + offset),
+                    )
+                )
+            select = discord.ui.Select(
+                custom_id=(
+                    CID_PLAY_TRACK
+                    if menu_index == 0
+                    else f"{CID_PLAY_TRACK}_{menu_index}"
+                ),
+                placeholder="▶ Play a track" if menu_index == 0 else "▶ More tracks",
+                options=options,
+            )
+
+            async def play_selected(
+                interaction: discord.Interaction, *, menu: discord.ui.Select = select
+            ) -> None:
+                raw = (menu.values or [""])[0]
+                try:
+                    chosen = tracks[int(raw)]
+                except (ValueError, IndexError):
+                    await interaction.response.send_message(
+                        "That track is gone — open the release again.", ephemeral=True
+                    )
+                    return
+                await on_play(interaction, chosen)
+
+            select.callback = play_selected
+            self.add_item(select)
 
     @property
     def embed(self) -> discord.Embed:
@@ -791,7 +904,11 @@ class Bandcamp(commands.Cog):
             self, identifier="bandcamp", force_registration=True
         )
         self.config.register_guild(
-            per_page=DEFAULT_PER_PAGE, autoembed=False, autoembed_channels=[]
+            per_page=DEFAULT_PER_PAGE,
+            autoembed=False,
+            autoembed_channels=[],
+            play=True,
+            play_mib=DEFAULT_PLAY_MIB,
         )
         self.session: Optional[aiohttp.ClientSession] = None
         self.service: Optional[BandcampService] = None
@@ -851,20 +968,36 @@ class Bandcamp(commands.Cog):
         with contextlib.suppress(discord.HTTPException):
             await ctx.typing()
 
+    def _view_for(
+        self,
+        detail: Detail,
+        *,
+        back: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
+    ) -> PageView:
+        """The detail view, with playback controls when the release is playable."""
+        return PageView(
+            self,
+            detail.pages,
+            link=detail.link,
+            back=back,
+            play=detail.playable,
+            on_play=self.play_track,
+        )
+
     async def _send_pages(
         self,
         ctx: commands.Context,
-        pages: Sequence[discord.Embed],
+        detail: Detail,
         *,
-        link: Optional[str] = None,
         back: Optional[Callable[[discord.Interaction], Awaitable[None]]] = None,
     ) -> None:
-        """Post a detail view, or edit the interaction's own message into one."""
-        pages = list(pages) or [
-            error_embed("Nothing to show", "Bandcamp answered empty.")
-        ]
-        view = PageView(self, pages, link=link, back=back)
-        message = await ctx.send(embed=pages[0], view=view)
+        """Post a detail view."""
+        if not detail.pages:
+            detail = Detail(
+                [error_embed("Nothing to show", "Bandcamp answered empty.")]
+            )
+        view = self._view_for(detail, back=back)
+        message = await ctx.send(embed=detail.pages[0], view=view)
         view.message = message
 
     async def _send_error(
@@ -878,32 +1011,37 @@ class Bandcamp(commands.Cog):
 
     async def _detail_for(
         self, row: Dict[str, Any], *, colour: discord.Colour
-    ) -> Tuple[List[discord.Embed], Optional[str]]:
+    ) -> Detail:
         """Turn a list row into the embeds of its detail page."""
         resolved = await self.api.open_result(row)
         return await self._embeds_for_resolved(resolved, colour=colour)
 
     async def _embeds_for_resolved(
         self, resolved: Any, *, colour: discord.Colour
-    ) -> Tuple[List[discord.Embed], Optional[str]]:
+    ) -> Detail:
         kind, item = resolved.kind, resolved.item
+        link = getattr(item, "url", None)
         if kind == KIND_ALBUM:
-            return build_album_embeds(item, colour=colour), getattr(item, "url", None)
+            return Detail(build_album_embeds(item, colour=colour), link, album=item)
         if kind == KIND_TRACK:
-            return build_track_embeds(item, colour=colour), getattr(item, "url", None)
+            return Detail(build_track_embeds(item, colour=colour), link, track=item)
         if kind == KIND_ARTIST:
             releases = None
             with contextlib.suppress(BandcampError):
                 releases = await self.api.discography(item.id)
-            return (
-                build_artist_embeds(item, colour=colour, releases=releases),
-                getattr(item, "url", None),
+            return Detail(
+                build_artist_embeds(item, colour=colour, releases=releases), link
             )
-        return [
-            error_embed(
-                "Unknown result", "That is not something I can open.", colour=colour
-            )
-        ], None
+        return Detail(
+            [
+                error_embed(
+                    "Unknown result",
+                    "That is not something I can open.",
+                    colour=colour,
+                )
+            ],
+            None,
+        )
 
     async def _open_row(
         self,
@@ -916,7 +1054,7 @@ class Bandcamp(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.defer()
         try:
-            pages, link = await self._detail_for(
+            detail = await self._detail_for(
                 row, colour=await self._colour(interaction.channel)
             )
         except BandcampError as error:
@@ -924,14 +1062,16 @@ class Bandcamp(commands.Cog):
                 embed=error_embed("Bandcamp did not answer", str(error)), ephemeral=True
             )
             return
-        if not pages:
+        if not detail.pages:
             await interaction.followup.send(
                 embed=error_embed("Nothing to show", "Bandcamp answered empty."),
                 ephemeral=True,
             )
             return
-        view = PageView(self, pages, link=link, back=back)
-        message = await interaction.edit_original_response(embed=pages[0], view=view)
+        view = self._view_for(detail, back=back)
+        message = await interaction.edit_original_response(
+            embed=detail.pages[0], view=view
+        )
         view.message = message
 
     async def _colour(self, location: Any = None) -> discord.Colour:
@@ -1028,13 +1168,13 @@ class Bandcamp(commands.Cog):
             resolved = await self.api.resolve(query, kind=KIND_ALBUM)
             if resolved.kind != KIND_ALBUM:
                 raise BandcampError("That is not an album or track link.")
-            pages, link = await self._embeds_for_resolved(resolved, colour=colour)
+            detail = await self._embeds_for_resolved(resolved, colour=colour)
         except BandcampError as error:
             await self._send_error(
                 ctx, "Could not open that release", str(error), colour
             )
             return
-        await self._send_pages(ctx, pages, link=link)
+        await self._send_pages(ctx, detail)
 
     @bandcamp.command(name="track")
     @commands.bot_has_permissions(embed_links=True)
@@ -1047,11 +1187,11 @@ class Bandcamp(commands.Cog):
             resolved = await self.api.resolve(query, kind=KIND_TRACK)
             if resolved.kind != KIND_TRACK:
                 raise BandcampError("That is not a track link.")
-            pages, link = await self._embeds_for_resolved(resolved, colour=colour)
+            detail = await self._embeds_for_resolved(resolved, colour=colour)
         except BandcampError as error:
             await self._send_error(ctx, "Could not open that track", str(error), colour)
             return
-        await self._send_pages(ctx, pages, link=link)
+        await self._send_pages(ctx, detail)
 
     @bandcamp.command(name="artist", aliases=["band"])
     @commands.bot_has_permissions(embed_links=True)
@@ -1064,13 +1204,13 @@ class Bandcamp(commands.Cog):
             resolved = await self.api.resolve(query, kind=KIND_ARTIST)
             if resolved.kind != KIND_ARTIST:
                 raise BandcampError("That is not a band page.")
-            pages, link = await self._embeds_for_resolved(resolved, colour=colour)
+            detail = await self._embeds_for_resolved(resolved, colour=colour)
         except BandcampError as error:
             await self._send_error(
                 ctx, "Could not open that artist", str(error), colour
             )
             return
-        await self._send_pages(ctx, pages, link=link)
+        await self._send_pages(ctx, detail)
 
     @bandcamp.command(name="discography", aliases=["releases"])
     @commands.bot_has_permissions(embed_links=True)
@@ -1153,8 +1293,13 @@ class Bandcamp(commands.Cog):
                         f"**{truncate(item.title, 100)}** has no lyrics on Bandcamp."
                     )
                 track, lyrics = await self.api.track_lyrics(item.artist.id, item.id)
-                pages = build_lyrics_embeds(track, lyrics, colour=colour)
-                await self._send_pages(ctx, pages, link=getattr(track, "url", None))
+                await self._send_pages(
+                    ctx,
+                    Detail(
+                        build_lyrics_embeds(track, lyrics, colour=colour),
+                        getattr(track, "url", None),
+                    ),
+                )
                 return
             album = await self.api.album_lyrics(
                 resolved.item.artist.id, resolved.item.id
@@ -1164,7 +1309,7 @@ class Bandcamp(commands.Cog):
                 raise BandcampError(
                     f"**{truncate(album.title, 100)}** has no lyrics on Bandcamp."
                 )
-            await self._send_pages(ctx, pages, link=getattr(album, "url", None))
+            await self._send_pages(ctx, Detail(pages, getattr(album, "url", None)))
         except BandcampError as error:
             await self._send_error(ctx, "No lyrics to show", str(error), colour)
             return
@@ -1178,11 +1323,122 @@ class Bandcamp(commands.Cog):
         colour = await self._colour(ctx)
         try:
             resolved = await self.api.resolve(url)
-            pages, link = await self._embeds_for_resolved(resolved, colour=colour)
+            detail = await self._embeds_for_resolved(resolved, colour=colour)
         except BandcampError as error:
             await self._send_error(ctx, "Could not open that link", str(error), colour)
             return
-        await self._send_pages(ctx, pages, link=link)
+        await self._send_pages(ctx, detail)
+
+    # -- playback ---------------------------------------------------------
+    async def _play_cap(self, guild: Optional[discord.Guild]) -> int:
+        """Bytes this guild may upload for one track.
+
+        The per-guild MiB setting is clamped to Discord's own bot ceiling of
+        20 MiB and, when the guild allows less, to the guild's file size limit.
+        """
+        settings = {"play_mib": DEFAULT_PLAY_MIB}
+        if guild is not None:
+            settings = await self.config.guild(guild).all()
+        try:
+            mib = int(settings.get("play_mib") or DEFAULT_PLAY_MIB)
+        except (TypeError, ValueError):
+            mib = DEFAULT_PLAY_MIB
+        mib = max(1, min(MAX_AUDIO_MIB, mib))
+        cap = mib * 1024 * 1024
+        if guild is not None:
+            with contextlib.suppress(Exception):
+                cap = min(cap, int(guild.filesize_limit))
+        return cap
+
+    async def play_track(self, target: Any, track: Any) -> None:
+        """Post one track's preview MP3, which Discord turns into a player.
+
+        A bot cannot put playable audio *inside* an embed — the player only
+        exists for an uploaded file — so this posts the file as its own message
+        next to the card that asked for it. ``target`` is either an
+        ``Interaction`` (a menu pick or button) or a command context.
+        """
+        interaction = target if isinstance(target, discord.Interaction) else None
+        guild = getattr(target, "guild", None)
+
+        async def answer(text: str) -> None:
+            """A short note, ephemeral when we can be."""
+            with contextlib.suppress(discord.HTTPException):
+                if interaction is not None:
+                    await interaction.followup.send(text, ephemeral=True)
+                else:
+                    await target.send(text)
+
+        if guild is not None:
+            settings = await self.config.guild(guild).all()
+            if not settings.get("play", True):
+                await answer(
+                    "Playback is switched off on this server — an admin can "
+                    "enable it with `bandcamp set play on`."
+                )
+                return
+        cap = await self._play_cap(guild)
+        if interaction is not None:
+            if not interaction.response.is_done():
+                await interaction.response.defer(thinking=True)
+        else:
+            with contextlib.suppress(discord.HTTPException):
+                await target.typing()
+        artist_id = int(getattr(getattr(track, "artist", None), "id", 0) or 0)
+        try:
+            fresh, data, _content_type = await self.api.audio(
+                artist_id, track.id, max_bytes=cap
+            )
+        except BandcampError as error:
+            await answer(f"Could not load that track: {error}")
+            return
+        caption = (
+            f"🎵 **{_label(fresh.title, 100)}** — "
+            f"{_label(_display_artist(fresh), 100)} · "
+            f"{format_duration(fresh.duration)} · "
+            f"{len(data) / (1024 * 1024):.1f} MiB"
+        )
+        upload = {
+            "content": caption,
+            "file": discord.File(
+                io.BytesIO(data),
+                filename=audio_filename(_display_artist(fresh), fresh.title),
+                description=f"{_display_artist(fresh)} — {fresh.title}",
+            ),
+        }
+        try:
+            if interaction is not None:
+                await interaction.followup.send(**upload)
+            else:
+                await target.send(**upload)
+        except discord.HTTPException:
+            await answer(
+                "Discord refused that upload — the bot may be missing "
+                "**Attach Files**, or the server's file limit is lower than the track."
+            )
+
+    @bandcamp.command(name="play")
+    @commands.bot_has_permissions(embed_links=True, attach_files=True)
+    @commands.cooldown(2, 60, commands.BucketType.user)
+    async def bandcamp_play(self, ctx: commands.Context, *, query: str) -> None:
+        """Load one track's preview and post it as a playable file.
+
+        Takes a search phrase or a Bandcamp link. The file is a 128 kbps preview
+        of the track, not a download of the release.
+        """
+        await self._defer(ctx)
+        colour = await self._colour(ctx)
+        try:
+            resolved = await self.api.resolve(query, kind=KIND_TRACK)
+            if resolved.kind != KIND_TRACK:
+                raise BandcampError(
+                    "That is not a track — give me a track or its link."
+                )
+            track = resolved.item
+        except BandcampError as error:
+            await self._send_error(ctx, "Could not find that track", str(error), colour)
+            return
+        await self.play_track(ctx, track)
 
     # -- autoembed --------------------------------------------------------
     @bandcamp.group(name="autoembed", aliases=["auto"], invoke_without_command=True)
@@ -1291,13 +1547,14 @@ class Bandcamp(commands.Cog):
                     self._recent.pop(stale, None)
             try:
                 resolved = await self.api.resolve(parsed.url)
-                pages, _ = await self._embeds_for_resolved(resolved, colour=colour)
+                detail = await self._embeds_for_resolved(resolved, colour=colour)
+                pages = detail.pages
             except BandcampError as error:
                 log.debug("Autoembed skipped %s: %s", parsed.url, error)
                 continue
             if not pages:
                 continue
-            view = PageView(self, pages, link=parsed.url)
+            view = self._view_for(detail)
             try:
                 posted = await message.reply(
                     embed=pages[0],
@@ -1333,10 +1590,18 @@ class Bandcamp(commands.Cog):
             name="Preview channels",
             value=", ".join(f"<#{channel}>" for channel in channels) or "every channel",
         )
+        embed.add_field(
+            name="Playback",
+            value=(
+                ("on" if settings.get("play", True) else "off")
+                + f" · up to {settings.get('play_mib', DEFAULT_PLAY_MIB)} MiB per track"
+            ),
+        )
         embed.set_footer(
             text=(
                 f"{ctx.clean_prefix}bandcamp set perpage <1-{MAX_PER_PAGE}> · "
-                f"{ctx.clean_prefix}bandcamp autoembed on|off"
+                f"{ctx.clean_prefix}bandcamp set play on|off · "
+                f"{ctx.clean_prefix}bandcamp set playlimit <1-{MAX_AUDIO_MIB}>"
             )
         )
         await ctx.send(embed=embed)
@@ -1350,6 +1615,36 @@ class Bandcamp(commands.Cog):
             return
         await self.config.guild(ctx.guild).per_page.set(amount)
         await ctx.send(f"Bandcamp lists now show **{amount}** entries per page.")
+
+    @bandcamp_set.command(name="play")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_set_play(self, ctx: commands.Context, state: str = "") -> None:
+        """Allow or refuse posting a track as a playable file."""
+        wanted = (state or "").strip().casefold()
+        if wanted not in {"on", "off", "true", "false", "yes", "no"}:
+            current = await self.config.guild(ctx.guild).play()
+            await ctx.send(
+                f"Playback is **{'on' if current else 'off'}**. "
+                f"Use `{ctx.clean_prefix}bandcamp set play on` or `… off`."
+            )
+            return
+        enabled = wanted in {"on", "true", "yes"}
+        await self.config.guild(ctx.guild).play.set(enabled)
+        await ctx.send(f"Track playback is **{'on' if enabled else 'off'}**.")
+
+    @bandcamp_set.command(name="playlimit", aliases=["playmib"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_set_playlimit(self, ctx: commands.Context, mib: int) -> None:
+        """Largest size a posted track may have, in MiB (default 8, max 20)."""
+        if not 1 <= mib <= MAX_AUDIO_MIB:
+            await ctx.send(f"Give me a number between 1 and {MAX_AUDIO_MIB}.")
+            return
+        await self.config.guild(ctx.guild).play_mib.set(mib)
+        # 128 kbps is ~17 KB/s, so one MiB is roughly a minute of audio.
+        await ctx.send(
+            f"Posted tracks may now be up to **{mib} MiB** — about {mib} minutes "
+            "of Bandcamp's 128 kbps preview."
+        )
 
     @bandcamp.command(name="status")
     @commands.bot_has_permissions(embed_links=True)
