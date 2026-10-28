@@ -46,12 +46,20 @@ takes `bandcamp`, and the commands are `[p]bandcamp` / `[p]bc` and
 | `[p]bandcamp discography <artist>` | Every release, newest first, in a pickable list |
 | `[p]bandcamp lyrics <track\|album>` | The lyrics of one track, or of every track that has them |
 | `[p]bandcamp play <track\|link>` | Post a track's preview as a playable file (see [Playback](#playback)) |
+| `[p]bandcamp follow <artist\|label>` | Watch an artist and announce new releases |
+| `[p]bandcamp unfollow <artist\|id>` | Stop watching one |
+| `[p]bandcamp following` | What this server watches, and where |
 | `[p]bandcamp link <url>` | Whatever a link points at — album, track or band page |
 | `[p]bandcamp autoembed [on\|off]` | Answer pasted Bandcamp links with an embed (default off) |
 | `[p]bandcamp autoembed channel [#channel]` | Limit previews to one channel (`channel remove #channel` drops it) |
 | `[p]bandcamp set perpage <1-25>` | Entries per list page (default 10) |
 | `[p]bandcamp set play <on\|off>` | Allow posting tracks as playable files (default on) |
 | `[p]bandcamp set playlimit <1-20>` | Largest posted track in MiB (default 8) |
+| `[p]bandcamp notifications channel <#channel>` | Where new releases are announced |
+| `[p]bandcamp notifications off` | Stop announcing (watchlist stays) |
+| `[p]bandcamp notifications role <@role\|none>` | Ping a role with each announcement |
+| `[p]bandcamp notifications interval <15-360>` | Poll interval in minutes (default 30) |
+| `[p]bandcamp notifications check` | Poll right now and report what is new |
 | `[p]bandcamp set` | Show this server's settings |
 | `[p]bandcamp status` | Endpoint, cache size, library |
 | `[p]bandcamp clearcache` | Drop the cache (bot owner) |
@@ -99,6 +107,44 @@ Consequences:
 
 Price lines read like the release page: an amount with its currency, `Name your
 price`, `Free`, or `Preorder`.
+
+## Watchlist
+
+Follow an artist or a label and the bot announces what they publish:
+
+```
+[p]bandcamp follow burial
+[p]bandcamp notifications channel #new-music
+[p]bandcamp notifications role @releases
+[p]bandcamp following
+```
+
+How it behaves:
+
+- **Following seeds the list silently.** Every release the page already lists is
+  recorded, so following Hyperdub (225 releases) announces nothing until
+  something genuinely new appears.
+- **"New" is a new `item_id`, not a new date.** The discography endpoint is not
+  in date order (Burial answers 2025, 2011, 2024), so a poll diffs the ids it
+  knows against the ids the page lists, then sorts the difference by date for the
+  announcement order.
+- **One card per release**, at most three per band per poll, with cover, released,
+  tracks, price and a Play menu — plus a ping if `notifications role` is set
+  (`@everyone` is handled: the default role renders as `@@everyone` otherwise).
+- **Polling** runs on a 5-minute ticker; a guild is polled when its interval has
+  passed (default 30 min, minimum 15). One request per followed band, three in
+  parallel, and the answer is cached for a minute so two guilds watching the same
+  band cost one request.
+- **Cap:** 50 followed pages per server. A band's known-id list is capped at 400
+  entries (newest first), which only drops releases old enough never to reappear.
+- **State** lives in Red's Config (`watch`), so a restart neither duplicates nor
+  loses anything: the ids are on disk, not in memory.
+- A release whose details will not load still gets announced, from the
+  discography row alone (title, date, cover) — a hidden or region-locked page is
+  not a silent skip.
+
+Labels are just band pages with a long discography, so `follow` works for
+`hyperdub`, `apollo`, and so on.
 
 ## Playback
 
@@ -183,6 +229,9 @@ Off by default, because unsolicited bot posts are noise.
 | `perpage <1-25>` | `10` | Entries per list page |
 | `play <on\|off>` | `on` | Post tracks as playable files |
 | `play_mib <1-20>` | `8` | Largest posted track (clamped to Discord's 20 MiB) |
+| `watch_interval <15-360>` | `30` | Watchlist poll interval in minutes |
+| `watch_channel` | unset | Announcement channel |
+| `watch_role` | unset | Role pinged with each announcement |
 | `autoembed <on\|off>` | `off` | Preview pasted links |
 | `autoembed_channels` | empty | Empty = every channel, otherwise the listed ones |
 
@@ -216,7 +265,8 @@ track row, not on the release object.
 ## Data and privacy
 
 Guild settings only (results per page, auto previews, preview channels, playback
-and its size cap) in Red's Config. Search queries and Bandcamp answers are cached **in memory** and dropped
+and its size cap, and the watchlist: followed band ids with their release ids,
+channel, role and interval) in Red's Config. Search queries and Bandcamp answers are cached **in memory** and dropped
 on restart; no Discord user data is stored and none leaves the bot. Queries go to
 `bandcamp.com` from the bot host, so that host's IP is visible to Bandcamp — no
 login, no cookie, no identity token is used. `[p]mydata` returns nothing for this
@@ -243,6 +293,15 @@ cog.
   streaming (preorders do this). Nothing to post.
 - **No player after picking a track** — the bot needs **Attach Files** in that
   channel; without it Discord refuses the upload and the cog says so.
+- **Followed a band and nothing was announced** — the existing releases were
+  recorded on purpose; the first announcement comes with the next genuine upload.
+- **"Already following"** — one entry per page id; `[p]bandcamp following` shows
+  the id-backed list, `unfollow` takes the name, the link or the id.
+- **No announcements although a release appeared** — check that a channel is set
+  (`notifications channel`), that the guild interval has passed, and that the bot
+  can embed there; `notifications check` polls immediately and says what it found.
+- **`notifications check` says "nothing new"** — the release is already in the
+  known list (it was found on a previous tick) or the page has not published it.
 - **A button says the view expired** — the bot restarted; run the command again.
 - **`[p]bandcamp` is unknown** — the cog is installed but not loaded, or another
   cog already claims `bc`. `[p]load bandcamp` and `[p]help Bandcamp` show which.

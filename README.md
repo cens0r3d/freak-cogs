@@ -410,6 +410,9 @@ anonymously.
 | `[p]bandcamp discography <artist>` | Every release, newest first, in a pickable list |
 | `[p]bandcamp lyrics <track\|album>` | Lyrics of one track, or of every track that has them |
 | `[p]bandcamp play <track\|link>` | Post a track's 128 kbps preview as a playable file |
+| `[p]bandcamp follow <artist\|label>` | Watch an artist, announce new releases |
+| `[p]bandcamp following` / `unfollow` | Show or shrink the watchlist |
+| `[p]bandcamp notifications channel\|role\|interval\|check\|off` | Where, whom and how often to announce |
 | `[p]bandcamp link <url>` | Whatever a link points at |
 | `[p]bandcamp autoembed [on\|off]` | Answer pasted Bandcamp links (default off, limitable to one channel) |
 | `[p]bandcamp set perpage <1-25>` | Entries per list page (default 10) |
@@ -429,6 +432,11 @@ Notes:
   button) that uploads the track's 128 kbps preview, because a bot cannot put playable
   audio inside an embed. On demand only, one track per click, size-capped
   (`set playlimit`, default 8 MiB ≈ 8 minutes) and switchable with `set play off`.
+- **Watchlist**: `follow` records every release the page already lists (silently), then
+  announces what is new — diffed on release ids, because the discography endpoint is not in
+  date order. One card per release, max three per band per poll, 50 followed pages, poll
+  interval 15–360 min (default 30) on a 5-minute ticker, state in Red's Config so restarts
+  neither repeat nor lose anything.
 - **Cache and limits**: searches 10 min, entries 30 min, in memory. A `429` becomes a
   sentence with the `Retry-After` seconds instead of a traceback.
 - **No requirements on purpose**: `bandcamp-async-api` demands Python ≥3.12 and would fail
