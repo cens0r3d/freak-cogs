@@ -436,6 +436,54 @@ Notes:
   only `aiohttp`, which Red ships.
 - Full manual: [`bandcamp/README.md`](bandcamp/README.md).
 
+### goabase
+
+New Goa/Psytrance parties from [goabase.net](https://www.goabase.net) as embeds, posted to a
+channel as they show up in the site's catalogue: flyer as the image, when/where/entry/line-up
+as fields, and link buttons for tickets, map, party page and the full list.
+**No API key, no requirements.**
+
+```
+[p]goabase channel #parties
+[p]goabase countries CH DE
+[p]goabase interval 30
+[p]goabase preview 3
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]goabase channel [#channel]` | Announcement channel (no argument clears it) |
+| `[p]goabase countries [codes…]` | Countries to watch, ISO codes (default CH) |
+| `[p]goabase interval <5-360>` | Minutes between checks (default 30) |
+| `[p]goabase timezone <zone>` | Timezone party times are rendered in |
+| `[p]goabase days <1-365>` | Only announce parties starting within this window |
+| `[p]goabase batch <1-10>` | Max announcements per poll |
+| `[p]goabase pause` / `resume` / `reseed` | Stop, restart, re-baseline |
+| `[p]goabase status` / `next [n]` / `preview [n]` | Config state / list the next parties / post them now |
+| `[p]goabase show <link\|id>` / `autoembed [on\|off]` / `autochannel [#chan]` | Post one embed on demand / answer posted party links / limit that to one channel |
+
+Notes:
+
+- **Works as a prefix and a slash command**: `[p]goabase …`, `[p]gbase …`, `/goabase …`.
+- **Detection is a set difference over party ids**, not the RSS feed. goabase's RSS lists the
+  20 next parties *by date*, so a party announced months ahead would only surface late. The
+  cog reads `/api/party/jsonld/?country=CH` (every upcoming party) and fetches the detail
+  payload only for ids it has never seen — one request per country per poll.
+- **The first poll after setup posts nothing** (it records the baseline); `preview` posts the
+  next parties immediately so you can see the embeds. Changing channel or countries resets the
+  baseline, ids are remembered for 45 days, and a party is never announced twice.
+- **Worldwide instead of a country list** with `[p]goabase worldwide` — one request per poll for
+  the whole catalogue (~320 parties), with `days` and `batch` as the flood controls.
+- **Entry, not a fake ticket shop**: goabase encodes "no presale" as an offer pointing at its own
+  `/party/entryfree/<id>` page, which the cog renders as `Box office 20 CHF` — a ticket button
+  only appears for a real external shop.
+- **Link embeds**: with `[p]goabase autoembed` a posted goabase party link is answered with the same
+  embed as a reply — `/party/<slug>/<id>`, `/party/<id>` and the bare `/<id>` form, up to three per
+  message, details cached 10 minutes. `[p]goabase show <link|id>` posts one on demand.
+- **Credit in the footer** (`goabase.net · CC BY-SA 2.0`) — required by the site's licence.
+- Full manual: [`goabase/README.md`](goabase/README.md).
+
+
 ### idlerpg
 
 The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Discord cog. Register a character and it levels purely by idling: every level-up finds an item, and the level-up may start a battle against anyone else present. No IRC server, no password — the Discord account *is* the login, and **every guild is its own realm** with its own settings.

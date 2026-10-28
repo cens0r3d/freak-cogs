@@ -1,0 +1,29 @@
+{
+    "author": [
+        "cens0r3d"
+    ],
+    "install_msg": "Thank you for installing Goabase!\n\nSetup: `[p]goabase channel #parties` picks the channel, `[p]goabase countries CH DE` sets the countries to watch (default: CH). The first poll after that records every current party as a baseline and posts nothing, so only parties added afterwards get announced. `[p]goabase preview 3` posts the next three parties immediately if you want to see the embeds.\n\nData source: goabase.net's schema.org export (`/api/party/jsonld/`), no API key needed. Announcements are embeds with link buttons for tickets, map and the party page; data is published under CC BY-SA 2.0 and the footer carries the credit.",
+    "name": "Goabase",
+    "short": "Announce new goabase.net Goa/Psytrance parties as embeds.",
+    "description": "Watches the goabase.net party catalogue for new Goa/Psytrance parties and posts each new one as an embed with link buttons (tickets, map, party page, full list). Also answers a posted party link with the same embed (autoembed, optional single-channel mode) and renders one on demand with show. Configure countries, poll interval, timezone, how far ahead to announce and how many parties one cycle may post. Detection uses the site's schema.org event list diffed against a stored id set, so a party announced months ahead is caught on the poll where it first appears, and a baseline prevents an announcement storm on first setup.",
+    "end_user_data_statement": "This cog stores guild-level configuration (channel id, countries, poll interval, timezone, batch size, pause state and the ids of already announced parties) in Red's Config. No message content and no per-user data is stored.",
+    "requirements": [],
+    "tags": [
+        "goabase",
+        "goa",
+        "psytrance",
+        "party",
+        "events",
+        "announcement",
+        "embed"
+    ],
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "hidden": false,
+    "disabled": false,
+    "type": "COG"
+}
