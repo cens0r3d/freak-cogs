@@ -15,6 +15,7 @@ anonymously, and the cog needs no Python package beyond what Red already ships.
 [p]bandcamp artist radiohead
 [p]bandcamp discography aphex twin
 [p]bandcamp lyrics https://burial.bandcamp.com/track/archangel
+[p]bandcamp play https://burial.bandcamp.com/track/archangel
 ```
 
 Every command exists twice: as `[p]bandcamp …` (short alias `[p]bc`) and as the
@@ -44,10 +45,13 @@ takes `bandcamp`, and the commands are `[p]bandcamp` / `[p]bc` and
 | `[p]bandcamp artist <query\|link>` | Profile: portrait, city, bio, release count, newest releases |
 | `[p]bandcamp discography <artist>` | Every release, newest first, in a pickable list |
 | `[p]bandcamp lyrics <track\|album>` | The lyrics of one track, or of every track that has them |
+| `[p]bandcamp play <track\|link>` | Post a track's preview as a playable file (see [Playback](#playback)) |
 | `[p]bandcamp link <url>` | Whatever a link points at — album, track or band page |
 | `[p]bandcamp autoembed [on\|off]` | Answer pasted Bandcamp links with an embed (default off) |
 | `[p]bandcamp autoembed channel [#channel]` | Limit previews to one channel (`channel remove #channel` drops it) |
 | `[p]bandcamp set perpage <1-25>` | Entries per list page (default 10) |
+| `[p]bandcamp set play <on\|off>` | Allow posting tracks as playable files (default on) |
+| `[p]bandcamp set playlimit <1-20>` | Largest posted track in MiB (default 8) |
 | `[p]bandcamp set` | Show this server's settings |
 | `[p]bandcamp status` | Endpoint, cache size, library |
 | `[p]bandcamp clearcache` | Drop the cache (bot owner) |
@@ -96,6 +100,41 @@ Consequences:
 Price lines read like the release page: an amount with its currency, `Name your
 price`, `Free`, or `Preorder`.
 
+## Playback
+
+Every release view carries a **▶ Play a track** menu — one entry per track with
+its number and duration — and a single track view carries a **▶ Play** button.
+Picking one posts that track's **128 kbps preview as an audio file**, which is
+the only way Discord shows a player: a bot cannot put playable audio *inside* an
+embed, and a bare link to Bandcamp's stream endpoint unfurls to nothing.
+
+What that means in practice:
+
+- **It is a copy, not a stream.** The file is uploaded to the channel, so it can
+  be downloaded, and it counts against the upload limit. Playback is therefore
+  strictly on demand — nothing is posted automatically, `autoembed` included.
+- **One track per action.** No queue, no playlist, no voice channel.
+- **128 kbps**, Bandcamp's preview quality. ~17 KB/s, so **1 MiB ≈ 1 minute** of
+  audio: the default 8 MiB cap is roughly eight minutes, the 20 MiB hard limit
+  about twenty. The size is checked twice — declared `Content-Length` first,
+  then while reading — and a track that does not fit is refused with its size
+  instead of a broken upload.
+- **Fresh link per play.** The `stream_redirect` URL in a cached payload is
+  signed with a timestamp, so a play re-reads the track (one cheap request)
+  instead of trusting an answer that may be half an hour old.
+- **A track without a preview** (an artist can hide one, common on preorders)
+  answers with that fact instead of an empty file.
+- Missing **Attach Files** permission or a smaller server limit is reported, not
+  raised.
+
+`[p]bandcamp set play off` turns the controls off server-wide (the menus stay,
+the click answers with a note), `[p]bandcamp set playlimit <1-20>` caps the size.
+
+Note on rights: a posted preview is a copy of the artist's stream hosted by
+Discord. Keep it to what people actually ask to hear — on demand, one track at a
+time — and point people at the release page (`Open on Bandcamp`) when they like
+it.
+
 ## Lists and buttons
 
 - A list shows numbered rows (`01` + type marker + linked title + metadata) with
@@ -142,6 +181,8 @@ Off by default, because unsolicited bot posts are noise.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `perpage <1-25>` | `10` | Entries per list page |
+| `play <on\|off>` | `on` | Post tracks as playable files |
+| `play_mib <1-20>` | `8` | Largest posted track (clamped to Discord's 20 MiB) |
 | `autoembed <on\|off>` | `off` | Preview pasted links |
 | `autoembed_channels` | empty | Empty = every channel, otherwise the listed ones |
 
@@ -174,8 +215,8 @@ track row, not on the release object.
 
 ## Data and privacy
 
-Guild settings only (results per page, auto previews, preview channels) in Red's
-Config. Search queries and Bandcamp answers are cached **in memory** and dropped
+Guild settings only (results per page, auto previews, preview channels, playback
+and its size cap) in Red's Config. Search queries and Bandcamp answers are cached **in memory** and dropped
 on restart; no Discord user data is stored and none leaves the bot. Queries go to
 `bandcamp.com` from the bot host, so that host's IP is visible to Bandcamp — no
 login, no cookie, no identity token is used. `[p]mydata` returns nothing for this
@@ -195,6 +236,13 @@ cog.
   tracks report `has_lyrics: false`.
 - **No cover** — some releases have no `art_id`. The embed ships without an image
   rather than with a broken one.
+- **"too long to post as a file"** — the track exceeds the size cap; the message
+  names both sizes. Raise it with `[p]bandcamp set playlimit`, or open the track
+  on Bandcamp.
+- **"Bandcamp has no preview for this track"** — the artist hid it from
+  streaming (preorders do this). Nothing to post.
+- **No player after picking a track** — the bot needs **Attach Files** in that
+  channel; without it Discord refuses the upload and the cog says so.
 - **A button says the view expired** — the bot restarted; run the command again.
 - **`[p]bandcamp` is unknown** — the cog is installed but not loaded, or another
   cog already claims `bc`. `[p]load bandcamp` and `[p]help Bandcamp` show which.
