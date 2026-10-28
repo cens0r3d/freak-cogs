@@ -29,8 +29,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tup
 
 import aiohttp
 import discord
+from discord.ext import tasks
 from redbot.core import Config, checks, commands
 from redbot.core.bot import Red
+from redbot.core.utils import bounded_gather
 
 from .api import (
     DEFAULT_PLAY_MIB,
@@ -41,6 +43,7 @@ from .api import (
     BandcampError,
     BandcampService,
     audio_filename,
+    known_keys,
     collect_bandcamp_urls,
     format_date,
     format_discography_date,
@@ -48,6 +51,7 @@ from .api import (
     format_price,
     format_tags,
     format_tracklist,
+    new_releases,
     plural,
     rank_results,
     result_row,
@@ -78,6 +82,14 @@ CID_PLAY_TRACK = "bandcamp:play_track"
 CID_PLAY_ONE = "bandcamp:play_one"
 #: A select menu holds 25 options, so a longer tracklist needs a second menu.
 PLAY_OPTIONS_PER_MENU = 25
+
+#: Watchlist: how often the ticker runs, and what a guild may configure.
+WATCH_TICK_MINUTES = 5
+WATCH_MIN_INTERVAL = 15
+WATCH_MAX_INTERVAL = 360
+WATCH_DEFAULT_INTERVAL = 30
+MAX_FOLLOWS = 50
+MAX_ANNOUNCE_PER_BAND = 3
 
 KIND_EMOJI = {KIND_ARTIST: "🎤", KIND_ALBUM: "💿", KIND_TRACK: "🎵"}
 
@@ -510,6 +522,80 @@ def build_album_lyrics_embeds(
     return _stamp_pages(pages, footer)
 
 
+def build_release_announcement(
+    item: Any, *, kind: str, colour: discord.Colour, band_name: str = ""
+) -> List[discord.Embed]:
+    """A new release as one card: facts and cover, not the whole tracklist.
+
+    An announcement reuses the release card but keeps only its first page and
+    replaces the footer, so a 20-track album does not arrive as four embeds.
+    """
+    if kind == KIND_TRACK:
+        pages = build_track_embeds(item, colour=colour)
+    else:
+        pages = build_album_embeds(item, colour=colour)
+    first = pages[0]
+    first.set_footer(text=truncate(f"New on Bandcamp · {band_name}".strip(" ·"), 2000))
+    return [first]
+
+
+def build_row_announcement(
+    row: Dict[str, Any], *, colour: discord.Colour, band_name: str = ""
+) -> discord.Embed:
+    """A discography row as a card, for a release whose details did not load."""
+    embed = discord.Embed(
+        title=truncate(row.get("title") or "New release", 240),
+        colour=colour,
+    )
+    embed.set_author(
+        name=truncate(band_name or row.get("band_name") or "Bandcamp", 240)
+    )
+    released = format_discography_date(row.get("release_date"))
+    if released:
+        embed.add_field(name="Released", value=released, inline=True)
+    kind = row.get("item_type") or KIND_ALBUM
+    embed.add_field(
+        name="Type", value="track" if kind == KIND_TRACK else "release", inline=True
+    )
+    art = track_art_url(row.get("art_id"))
+    if art:
+        embed.set_image(url=art)
+    embed.set_footer(text=truncate(f"New on Bandcamp · {band_name}".strip(" ·"), 2000))
+    return embed
+
+
+def _clamp_interval(value: Any) -> int:
+    """A stored poll interval in minutes, inside the allowed range."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        minutes = WATCH_DEFAULT_INTERVAL
+    return max(WATCH_MIN_INTERVAL, min(WATCH_MAX_INTERVAL, minutes))
+
+
+def role_mention(
+    guild: Optional[discord.Guild], role_id: Any
+) -> Tuple[Optional[str], bool]:
+    """The mention text for a stored role id, and whether it means @everyone.
+
+    ``Role.mention`` renders ``<@&guild-id>`` for the default role, which Discord
+    shows as ``@@everyone`` and pings nobody, so that case becomes the literal
+    text plus an allowed-mentions flag.
+    """
+    if guild is None or not role_id:
+        return None, False
+    try:
+        number = int(role_id)
+    except (TypeError, ValueError):
+        return None, False
+    if number == guild.id:
+        return "@everyone", True
+    role = guild.get_role(number)
+    if role is None:
+        return None, False
+    return role.mention, False
+
+
 def build_help_embed(prefix: str, colour: discord.Colour) -> discord.Embed:
     """What the cog does, in one card."""
     embed = discord.Embed(
@@ -529,6 +615,8 @@ def build_help_embed(prefix: str, colour: discord.Colour) -> discord.Embed:
         f"`{prefix}bandcamp discography <artist>` — every release, pickable",
         f"`{prefix}bandcamp play <query|link>` — post a track as a playable file",
         f"`{prefix}bandcamp lyrics <query|link>` — lyrics of a track or album",
+        f"`{prefix}bandcamp follow <artist>` — announce that band's new releases",
+        f"`{prefix}bandcamp following` — what this server watches",
         f"`{prefix}bandcamp link <url>` — whatever that link points at",
         f"`{prefix}bandcamp autoembed` — answer pasted links automatically",
     ]
@@ -909,11 +997,17 @@ class Bandcamp(commands.Cog):
             autoembed_channels=[],
             play=True,
             play_mib=DEFAULT_PLAY_MIB,
+            watch={},
+            watch_channel=None,
+            watch_role=None,
+            watch_interval=WATCH_DEFAULT_INTERVAL,
         )
         self.session: Optional[aiohttp.ClientSession] = None
         self.service: Optional[BandcampService] = None
         #: ``(channel_id, url key)`` -> monotonic time of the last preview.
         self._recent: Dict[Tuple[int, str], float] = {}
+        #: guild id -> monotonic time of the last watchlist poll.
+        self._last_poll: Dict[int, float] = {}
 
     # -- lifecycle --------------------------------------------------------
     async def cog_load(self) -> None:
@@ -921,6 +1015,7 @@ class Bandcamp(commands.Cog):
         self.service = BandcampService(self.session)
         with contextlib.suppress(Exception):
             self.bot.add_view(PlaceholderView(self))
+        self._watch_tick.start()
 
     def cog_unload(self) -> None:
         """Drop the client and close its session.
@@ -929,6 +1024,8 @@ class Bandcamp(commands.Cog):
         scheduled on the running loop; without that guard a reload leaks one
         session per load.
         """
+        if self._watch_tick.is_running():
+            self._watch_tick.cancel()
         session = self.session
         self.session = None
         self.service = None
@@ -1329,6 +1426,188 @@ class Bandcamp(commands.Cog):
             return
         await self._send_pages(ctx, detail)
 
+    # -- watchlist --------------------------------------------------------
+    @tasks.loop(minutes=WATCH_TICK_MINUTES)
+    async def _watch_tick(self) -> None:
+        """Poll the followed bands of every guild that is due."""
+        await self.bot.wait_until_ready()
+        for guild in list(self.bot.guilds):
+            try:
+                await self._poll_guild(guild)
+            except Exception:  # pragma: no cover - a bad guild must not stop the rest
+                log.exception("Bandcamp watch poll failed for guild %s", guild.id)
+
+    async def _poll_guild(self, guild: discord.Guild, *, force: bool = False) -> int:
+        """One guild's poll. Returns how many releases were announced."""
+        settings = await self.config.guild(guild).all()
+        watch = dict(settings.get("watch") or {})
+        channel_id = settings.get("watch_channel")
+        if not watch or not channel_id:
+            return 0
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            return 0
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return 0
+        interval = _clamp_interval(settings.get("watch_interval"))
+        now = time.monotonic()
+        last = self._last_poll.get(guild.id, 0.0)
+        if not force and last and now - last < interval * 60:
+            return 0
+        self._last_poll[guild.id] = now
+        colour = await self._colour(channel)
+        mention, everyone = role_mention(guild, settings.get("watch_role"))
+
+        async def fetch(band_id: str) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
+            try:
+                return band_id, await self.api.discography(band_id, fresh=True)
+            except BandcampError as error:
+                log.debug("Watch: could not read band %s: %s", band_id, error)
+                return band_id, None
+
+        results = await bounded_gather(*[fetch(band_id) for band_id in watch], limit=3)
+        announced = 0
+        changed = False
+        for band_id, rows in results:
+            if rows is None:
+                continue
+            entry = dict(watch.get(band_id) or {})
+            fresh = new_releases(
+                rows, entry.get("known") or [], limit=MAX_ANNOUNCE_PER_BAND
+            )
+            keys = known_keys(rows)
+            if keys != list(entry.get("known") or []):
+                entry["known"] = keys
+                changed = True
+            band_name = (
+                entry.get("name")
+                or (rows[0].get("band_name") if rows else "")
+                or "Bandcamp"
+            )
+            for position, row in enumerate(fresh):
+                first = position == 0 and announced == 0
+                posted = await self._announce(
+                    channel,
+                    row,
+                    band_name=band_name,
+                    colour=colour,
+                    mention=mention if first else None,
+                    everyone=everyone and first,
+                )
+                announced += 1 if posted else 0
+            watch[band_id] = entry
+        if changed:
+            await self.config.guild(guild).watch.set(watch)
+        if announced:
+            log.info(
+                "Bandcamp watch announced %s release(s) in guild %s",
+                announced,
+                guild.id,
+            )
+        return announced
+
+    async def _announce(
+        self,
+        channel: Any,
+        row: Dict[str, Any],
+        *,
+        band_name: str,
+        colour: discord.Colour,
+        mention: Optional[str] = None,
+        everyone: bool = False,
+    ) -> bool:
+        """Post one new release, falling back to the raw row if it will not load."""
+        band_id = row.get("band_id")
+        item_id = row.get("item_id")
+        kind = KIND_TRACK if (row.get("item_type") or "") == KIND_TRACK else KIND_ALBUM
+        detail: Detail
+        try:
+            if kind == KIND_TRACK:
+                item = await self.api.track(band_id, item_id)
+                detail = Detail(
+                    build_release_announcement(
+                        item, kind=kind, colour=colour, band_name=band_name
+                    ),
+                    getattr(item, "url", None),
+                    track=item,
+                )
+            else:
+                item = await self.api.album(band_id, item_id)
+                detail = Detail(
+                    build_release_announcement(
+                        item, kind=kind, colour=colour, band_name=band_name
+                    ),
+                    getattr(item, "url", None),
+                    album=item,
+                )
+        except BandcampError as error:
+            log.debug("Watch: release %s did not load: %s", item_id, error)
+            detail = Detail(
+                [build_row_announcement(row, colour=colour, band_name=band_name)]
+            )
+        content = f"New from **{_label(band_name, 100)}**"
+        if mention:
+            content = f"{mention} {content}"
+        view = self._view_for(detail)
+        try:
+            message = await channel.send(
+                content=content,
+                embed=detail.pages[0],
+                view=view,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=everyone, roles=not everyone, users=False
+                ),
+            )
+        except discord.HTTPException:
+            log.debug("Watch: could not post the announcement for %s", item_id)
+            return False
+        view.message = message
+        return True
+
+    async def _watch_summary(self, guild: discord.Guild) -> discord.Embed:
+        """The current watchlist as a card."""
+        settings = await self.config.guild(guild).all()
+        watch = dict(settings.get("watch") or {})
+        channel_id = settings.get("watch_channel")
+        embed = discord.Embed(
+            title="Bandcamp watchlist",
+            description=(
+                "New releases from followed artists and labels are posted "
+                f"to {f'<#{channel_id}>' if channel_id else '**nowhere yet**'}."
+            ),
+            colour=await self._colour(guild),
+        )
+        if watch:
+            entries = sorted(watch.items(), key=lambda item: item[1].get("name") or "")
+            lines = [
+                f"• [{_label(entry.get('name') or band_id, 90)}]"
+                f"({entry.get('url') or 'https://bandcamp.com'}) · "
+                f"{len(entry.get('known') or [])} releases known"
+                for band_id, entry in entries[:20]
+            ]
+            if len(entries) > 20:
+                lines.append(f"… and {len(entries) - 20} more")
+            embed.add_field(
+                name="Following", value="\n".join(lines)[:1024], inline=False
+            )
+        else:
+            embed.add_field(
+                name="Following",
+                value="Nothing yet — an admin can add one with "
+                "`bandcamp follow <artist>`.",
+                inline=False,
+            )
+        role = settings.get("watch_role")
+        embed.add_field(
+            name="Ping", value=f"<@&{role}>" if role else "off", inline=True
+        )
+        embed.add_field(
+            name="Interval",
+            value=f"{_clamp_interval(settings.get('watch_interval'))} min",
+            inline=True,
+        )
+        return embed
+
     # -- playback ---------------------------------------------------------
     async def _play_cap(self, guild: Optional[discord.Guild]) -> int:
         """Bytes this guild may upload for one track.
@@ -1439,6 +1718,213 @@ class Bandcamp(commands.Cog):
             await self._send_error(ctx, "Could not find that track", str(error), colour)
             return
         await self.play_track(ctx, track)
+
+    # -- watchlist commands -----------------------------------------------
+    @bandcamp.command(name="follow")
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    @checks.admin_or_permissions(manage_guild=True)
+    @commands.cooldown(4, 60, commands.BucketType.guild)
+    async def bandcamp_follow(self, ctx: commands.Context, *, query: str) -> None:
+        """Follow an artist or label and announce their new releases."""
+        await self._defer(ctx)
+        colour = await self._colour(ctx)
+        try:
+            resolved = await self.api.resolve(query, kind=KIND_ARTIST)
+            if resolved.kind != KIND_ARTIST:
+                raise BandcampError("That is not a band or label page.")
+            artist = resolved.item
+            rows = await self.api.discography(artist.id)
+        except BandcampError as error:
+            await self._send_error(ctx, "Could not follow that", str(error), colour)
+            return
+        key = str(artist.id)
+        watch = dict(await self.config.guild(ctx.guild).watch() or {})
+        if key in watch:
+            await ctx.send(
+                f"Already following **{_label(artist.name, 100)}** — "
+                f"`{ctx.clean_prefix}bandcamp following` lists the watchlist."
+            )
+            return
+        if len(watch) >= MAX_FOLLOWS:
+            await ctx.send(
+                f"This server already follows {MAX_FOLLOWS} artists — unfollow one first."
+            )
+            return
+        watch[key] = {
+            "name": artist.name,
+            "url": getattr(artist, "url", None),
+            "image": getattr(artist, "image_url", None),
+            "known": known_keys(rows),
+            "followed": int(time.time()),
+        }
+        await self.config.guild(ctx.guild).watch.set(watch)
+        settings = await self.config.guild(ctx.guild).all()
+        channel_id = settings.get("watch_channel")
+        embed = discord.Embed(
+            title=f"Following {_label(artist.name, 100)}",
+            description=(
+                f"**{len(watch[key]['known'])}** existing releases are recorded, "
+                "so only genuinely new ones get announced."
+            ),
+            colour=colour,
+        )
+        if getattr(artist, "url", None):
+            embed.url = artist.url
+        if getattr(artist, "image_url", None):
+            embed.set_thumbnail(url=artist.image_url)
+        if channel_id:
+            embed.add_field(name="Announcements", value=f"<#{channel_id}>", inline=True)
+        else:
+            embed.add_field(
+                name="Announcements",
+                value=(
+                    "nowhere yet — "
+                    f"`{ctx.clean_prefix}bandcamp notifications channel #channel`"
+                ),
+                inline=True,
+            )
+        embed.add_field(
+            name="Interval",
+            value=f"{_clamp_interval(settings.get('watch_interval'))} min",
+            inline=True,
+        )
+        await ctx.send(embed=embed)
+
+    @bandcamp.command(name="unfollow")
+    @commands.guild_only()
+    @checks.admin_or_permissions(manage_guild=True)
+    @commands.cooldown(6, 60, commands.BucketType.guild)
+    async def bandcamp_unfollow(self, ctx: commands.Context, *, query: str) -> None:
+        """Stop watching an artist or label (name, link or id)."""
+        watch = dict(await self.config.guild(ctx.guild).watch() or {})
+        if not watch:
+            await ctx.send("This server follows nothing yet.")
+            return
+        raw = (query or "").strip()
+        key = raw if raw in watch else None
+        if key is None:
+            with contextlib.suppress(BandcampError):
+                resolved = await self.api.resolve(raw, kind=KIND_ARTIST)
+                if resolved.kind == KIND_ARTIST and str(resolved.item.id) in watch:
+                    key = str(resolved.item.id)
+        if key is None:
+            await ctx.send(
+                "That one is not on the watchlist — "
+                f"`{ctx.clean_prefix}bandcamp following` shows what is."
+            )
+            return
+        name = (watch.get(key) or {}).get("name") or key
+        watch.pop(key, None)
+        await self.config.guild(ctx.guild).watch.set(watch)
+        await ctx.send(f"Unfollowed **{_label(name, 100)}**.")
+
+    @bandcamp.command(name="following", aliases=["watchlist"])
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    async def bandcamp_following(self, ctx: commands.Context) -> None:
+        """List the artists and labels this server follows."""
+        await ctx.send(embed=await self._watch_summary(ctx.guild))
+
+    @bandcamp.group(
+        name="notifications", aliases=["notify"], invoke_without_command=True
+    )
+    @commands.guild_only()
+    @commands.bot_has_permissions(embed_links=True)
+    async def bandcamp_notifications(self, ctx: commands.Context) -> None:
+        """Where and how often new releases are announced."""
+        embed = await self._watch_summary(ctx.guild)
+        embed.set_footer(
+            text=(
+                f"{ctx.clean_prefix}bandcamp notifications channel #channel · "
+                f"role @role · interval <{WATCH_MIN_INTERVAL}-{WATCH_MAX_INTERVAL}> · "
+                f"check"
+            )
+        )
+        await ctx.send(embed=embed)
+
+    @bandcamp_notifications.command(name="channel")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_notifications_channel(
+        self, ctx: commands.Context, channel: discord.TextChannel
+    ) -> None:
+        """Announce new releases in this channel."""
+        permissions = channel.permissions_for(ctx.guild.me)
+        if not (permissions.send_messages and permissions.embed_links):
+            await ctx.send(
+                f"I need **Send Messages** and **Embed Links** in {channel.mention}."
+            )
+            return
+        await self.config.guild(ctx.guild).watch_channel.set(channel.id)
+        followed = len(await self.config.guild(ctx.guild).watch() or {})
+        await ctx.send(
+            f"New releases will be announced in {channel.mention}"
+            + (f" — {plural(followed, 'band')} followed." if followed else ".")
+        )
+
+    @bandcamp_notifications.command(name="off", aliases=["stop"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_notifications_off(self, ctx: commands.Context) -> None:
+        """Stop announcing new releases (the watchlist stays)."""
+        await self.config.guild(ctx.guild).watch_channel.set(None)
+        await ctx.send("Announcements are **off** — the watchlist itself is kept.")
+
+    @bandcamp_notifications.command(name="role")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_notifications_role(
+        self, ctx: commands.Context, role: Optional[discord.Role] = None
+    ) -> None:
+        """Ping a role with each announcement (`role none` clears it)."""
+        if role is None:
+            current = await self.config.guild(ctx.guild).watch_role()
+            text = f"<@&{current}>" if current else "off"
+            await ctx.send(
+                f"Current ping: {text}. Give me a role, or `role none` to clear it."
+            )
+            return
+        await self.config.guild(ctx.guild).watch_role.set(role.id)
+        if role.id == ctx.guild.id:
+            await ctx.send("Announcements will ping **@everyone**.")
+        else:
+            await ctx.send(f"Announcements will ping {role.mention}.")
+
+    @bandcamp_notifications.command(name="interval")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def bandcamp_notifications_interval(
+        self, ctx: commands.Context, minutes: int
+    ) -> None:
+        """How often the watchlist is polled, in minutes (15-360)."""
+        if not WATCH_MIN_INTERVAL <= minutes <= WATCH_MAX_INTERVAL:
+            await ctx.send(
+                f"Give me a number between {WATCH_MIN_INTERVAL} and {WATCH_MAX_INTERVAL}."
+            )
+            return
+        await self.config.guild(ctx.guild).watch_interval.set(minutes)
+        await ctx.send(f"The watchlist is polled every **{minutes} minutes**.")
+
+    @bandcamp_notifications.command(name="check", aliases=["poll"])
+    @checks.admin_or_permissions(manage_guild=True)
+    @commands.cooldown(1, 120, commands.BucketType.guild)
+    async def bandcamp_notifications_check(self, ctx: commands.Context) -> None:
+        """Poll the watchlist right now and report what is new."""
+        settings = await self.config.guild(ctx.guild).all()
+        if not settings.get("watch_channel"):
+            await ctx.send(
+                "Set a channel first — "
+                f"`{ctx.clean_prefix}bandcamp notifications channel #channel`."
+            )
+            return
+        if not settings.get("watch"):
+            await ctx.send(
+                f"This server follows nothing yet — `{ctx.clean_prefix}bandcamp follow <artist>`."
+            )
+            return
+        await self._defer(ctx)
+        count = await self._poll_guild(ctx.guild, force=True)
+        if count:
+            await ctx.send(f"Posted **{plural(count, 'new release')}**.")
+        else:
+            await ctx.send("Nothing new since the last check.")
 
     # -- autoembed --------------------------------------------------------
     @bandcamp.group(name="autoembed", aliases=["auto"], invoke_without_command=True)
@@ -1595,6 +2081,16 @@ class Bandcamp(commands.Cog):
             value=(
                 ("on" if settings.get("play", True) else "off")
                 + f" · up to {settings.get('play_mib', DEFAULT_PLAY_MIB)} MiB per track"
+            ),
+        )
+        following = len(settings.get("watch") or {})
+        channel_id = settings.get("watch_channel")
+        embed.add_field(
+            name="Watchlist",
+            value=(
+                f"{plural(following, 'band')} · "
+                + (f"<#{channel_id}>" if channel_id else "no channel")
+                + f" · every {_clamp_interval(settings.get('watch_interval'))} min"
             ),
         )
         embed.set_footer(

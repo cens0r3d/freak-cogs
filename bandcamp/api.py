@@ -48,6 +48,9 @@ KIND_TRACK = "track"
 #: Search answers change slowly, entity pages even slower.
 SEARCH_TTL = 600
 ENTITY_TTL = 1800
+#: Polling a watchlist must see a new release quickly; a minute still absorbs a
+#: double tick and two guilds watching the same band.
+FRESH_TTL = 60
 CACHE_SIZE = 256
 
 IMAGE_BASE = "https://f4.bcbits.com/img/"
@@ -585,6 +588,56 @@ def result_row(item: Any) -> Dict[str, Any]:
         if album_id:
             row["album_id"] = int(album_id)
     return row
+
+
+# --------------------------------------------------------------------------
+# watchlist diffs
+# --------------------------------------------------------------------------
+
+
+def release_key(row: Dict[str, Any]) -> str:
+    """A stable identity for a discography row."""
+    item_id = row.get("item_id")
+    return str(item_id) if item_id else ""
+
+
+def sort_releases(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Rows newest first, sorted on the parsed date.
+
+    The endpoint's own order is not chronological, so a comparison has to parse
+    the date it prints (``01 Aug 2025 00:00:00 GMT``).
+    """
+
+    def stamp(row: Dict[str, Any]) -> float:
+        text = str(row.get("release_date") or "")
+        for pattern in ("%d %b %Y %H:%M:%S %Z", "%d %b %Y %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, pattern).timestamp()
+            except ValueError:
+                continue
+        return 0.0
+
+    return sorted(rows, key=stamp, reverse=True)
+
+
+def new_releases(
+    rows: Sequence[Dict[str, Any]], known: Sequence[str], limit: int = 5
+) -> List[Dict[str, Any]]:
+    """Rows whose id is not in ``known``, newest first, at most ``limit``."""
+    seen = {str(entry) for entry in known}
+    fresh = [row for row in rows if release_key(row) and release_key(row) not in seen]
+    return sort_releases(fresh)[:limit]
+
+
+def known_keys(rows: Sequence[Dict[str, Any]], cap: int = 400) -> List[str]:
+    """The ids worth remembering for a followed band, newest first.
+
+    A label can list hundreds of releases; the cap keeps the stored list small.
+    Only the oldest entries fall off, so a release that is still current never
+    comes back as "new".
+    """
+    keys = [release_key(row) for row in sort_releases(rows) if release_key(row)]
+    return keys[:cap]
 
 
 # --------------------------------------------------------------------------
@@ -1195,11 +1248,24 @@ class BandcampService:
             lambda: self.client.get_artist(artist_id),
         )
 
-    async def discography(self, artist_id: Any) -> List[Dict[str, Any]]:
-        """Every release of an artist, newest first, as the raw API rows."""
+    async def discography(
+        self, artist_id: Any, *, fresh: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Every release of an artist as the raw API rows.
+
+        The rows are **not** in date order (Burial answers 2025, 2011, 2024), so
+        callers must diff on ``item_id`` — see :func:`new_releases`. ``fresh``
+        shortens the cache to a minute, which is what a watch poll needs.
+        """
+        if not fresh:
+            return await self._cached(
+                ("discography", int(artist_id)),
+                ENTITY_TTL,
+                lambda: self.client.get_artist_discography(artist_id),
+            )
         return await self._cached(
-            ("discography", int(artist_id)),
-            ENTITY_TTL,
+            ("discography-fresh", int(artist_id)),
+            FRESH_TTL,
             lambda: self.client.get_artist_discography(artist_id),
         )
 
