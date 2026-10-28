@@ -114,10 +114,15 @@ Follow an artist or a label and the bot announces what they publish:
 
 ```
 [p]bandcamp follow burial
-[p]bandcamp notifications channel #new-music
 [p]bandcamp notifications role @releases
 [p]bandcamp following
 ```
+
+Run `follow` where the announcements should go: **as long as no channel is
+configured, the first `follow` takes the channel it was used in** (a thread's
+parent, since a thread id cannot be polled) — provided the bot may send embeds
+there. A channel set with `notifications channel` always wins and is never
+overwritten.
 
 How it behaves:
 
@@ -137,8 +142,13 @@ How it behaves:
   band cost one request.
 - **Cap:** 50 followed pages per server. A band's known-id list is capped at 400
   entries (newest first), which only drops releases old enough never to reappear.
-- **State** lives in Red's Config (`watch`), so a restart neither duplicates nor
-  loses anything: the ids are on disk, not in memory.
+- **State** lives in Red's Config (`watch`, `watch_channel`, `watch_role`,
+  `watch_interval`), so a restart neither duplicates nor loses anything: the ids
+  are on disk, not in memory.
+- **The announcement channel is adopted, not guessed**: `follow` in a channel
+  takes that channel when none is set, and says so in its confirmation. If the
+  bot cannot embed there, it stays unset and the reply names the command to fix
+  it.
 - A release whose details will not load still gets announced, from the
   discography row alone (title, date, cover) — a hidden or region-locked page is
   not a silent skip.
@@ -295,6 +305,9 @@ cog.
   channel; without it Discord refuses the upload and the cog says so.
 - **Followed a band and nothing was announced** — the existing releases were
   recorded on purpose; the first announcement comes with the next genuine upload.
+- **Announcements land in the wrong channel** — the first `follow` adopted the
+  channel it ran in. `notifications channel #right-one` corrects it; the watchlist
+  is untouched.
 - **"Already following"** — one entry per page id; `[p]bandcamp following` shows
   the id-backed list, `unfollow` takes the name, the link or the id.
 - **No announcements although a release appeared** — check that a channel is set

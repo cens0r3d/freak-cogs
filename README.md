@@ -432,7 +432,8 @@ Notes:
   button) that uploads the track's 128 kbps preview, because a bot cannot put playable
   audio inside an embed. On demand only, one track per click, size-capped
   (`set playlimit`, default 8 MiB ≈ 8 minutes) and switchable with `set play off`.
-- **Watchlist**: `follow` records every release the page already lists (silently), then
+- **Watchlist**: `follow` records every release the page already lists (silently) and adopts
+  the channel it was used in when no announcement channel is set yet, then
   announces what is new — diffed on release ids, because the discography endpoint is not in
   date order. One card per release, max three per band per poll, 50 followed pages, poll
   interval 15–360 min (default 30) on a 5-minute ticker, state in Red's Config so restarts
