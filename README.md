@@ -7,7 +7,7 @@ Red-DiscordBot cogs.
 ```
 [p]repo add freak-cogs https://github.com/cens0r3d/freak-cogs
 [p]cog install freak-cogs
-[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs deadbydaylight psychonaut sherlockosint twitterfixer
+[p]load vcstatus kickalerts voicesay namint micwatch osint idlerpg discogs bandcamp deadbydaylight psychonaut sherlockosint twitterfixer
 ```
 
 Or install one at a time:
@@ -21,6 +21,7 @@ Or install one at a time:
 [p]cog install freak-cogs osint
 [p]cog install freak-cogs idlerpg
 [p]cog install freak-cogs discogs
+[p]cog install freak-cogs bandcamp
 [p]cog install freak-cogs deadbydaylight
 [p]cog install freak-cogs psychonaut
 [p]cog install freak-cogs sherlockosint
@@ -382,6 +383,53 @@ Notes:
 - Settings per server: results per page (default 8), marketplace currency (default `EUR`,
   e.g. `CHF`), thumbnails on/off.
 - Full manual: [`discogs/README.md`](discogs/README.md).
+
+### bandcamp
+
+Browse [Bandcamp](https://bandcamp.com) from Discord: search artists, albums and tracks,
+open a release with cover, price, tags, credits and a fully linked tracklist, read a single
+track, walk a discography, and read lyrics — from a phrase or straight from a link.
+**No API key, no token, no requirements** — Bandcamp's own mobile endpoints answer
+anonymously.
+
+```
+[p]bandcamp search burial
+[p]bandcamp album https://burial.bandcamp.com/album/untrue
+[p]bandcamp track archangel
+[p]bandcamp artist radiohead
+[p]bandcamp discography aphex twin
+[p]bandcamp lyrics https://burial.bandcamp.com/track/archangel
+```
+
+| Command | What it does |
+| --- | --- |
+| `[p]bandcamp search <query>` | Artists, albums and tracks; a menu opens the picked entry |
+| `[p]bandcamp album <query\|link>` | A release: cover, released, tracks, price, tags, credits, tracklist |
+| `[p]bandcamp track <query\|link>` | One track: album, number, length, label |
+| `[p]bandcamp artist <query\|link>` | Profile: portrait, city, bio, release count, newest releases |
+| `[p]bandcamp discography <artist>` | Every release, newest first, in a pickable list |
+| `[p]bandcamp lyrics <track\|album>` | Lyrics of one track, or of every track that has them |
+| `[p]bandcamp link <url>` | Whatever a link points at |
+| `[p]bandcamp autoembed [on\|off]` | Answer pasted Bandcamp links (default off, limitable to one channel) |
+| `[p]bandcamp set perpage <1-25>` | Entries per list page (default 10) |
+| `[p]bandcamp status` / `clearcache` | Endpoint and cache state / drop the cache (owner) |
+
+Notes:
+
+- **Works as a prefix command and as a slash command**: `[p]bandcamp …`, `[p]bc …`,
+  `/bandcamp …`.
+- **Links need no ids**: a Bandcamp URL is resolved through the search endpoint (the
+  release page answers a datacenter IP with a JavaScript challenge instead of HTML), so a
+  link resolves to itself or not at all.
+- **Every list is interactive**: the picker opens an entry in the same message, the buttons
+  page through results, and a **‹ Results** button goes back. Detail views carry
+  **Open on Bandcamp**.
+- **Cache and limits**: searches 10 min, entries 30 min, in memory. A `429` becomes a
+  sentence with the `Retry-After` seconds instead of a traceback.
+- **No requirements on purpose**: `bandcamp-async-api` demands Python ≥3.12 and would fail
+  the install on a Red bot running 3.11, so the four API calls live in the cog and need
+  only `aiohttp`, which Red ships.
+- Full manual: [`bandcamp/README.md`](bandcamp/README.md).
 
 ### idlerpg
 
