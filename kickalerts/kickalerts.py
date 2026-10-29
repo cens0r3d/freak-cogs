@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 import aiohttp
 import discord
@@ -404,12 +405,25 @@ def clean_slug(value: str) -> str:
 
 
 def _clean_slug(value: Any) -> str:
+    """A bare Kick slug from a slug, an ``@handle`` or a kick.com URL.
+
+    The host is parsed rather than searched for: a substring check happily
+    accepts ``kick.com.example.org/@someone`` and ``notkick.com`` as Kick links
+    (CodeQL ``py/incomplete-url-substring-sanitization``).
+    """
     if not isinstance(value, str):
         return ""
-    slug = value.strip().lower()
-    if "kick.com" in slug:
-        slug = slug.split("kick.com", 1)[1]
-    slug = slug.strip("/").split("/")[0].split("?")[0].strip().lstrip("@")
+    text = value.strip()
+    if not text:
+        return ""
+    if "://" in text or text.lower().startswith(("www.kick.com", "kick.com")):
+        parts = urlsplit(text if "://" in text else "https://" + text)
+        host = (parts.hostname or "").lower()
+        if host != "kick.com" and not host.endswith(".kick.com"):
+            return ""
+        text = parts.path
+    slug = text.split("?")[0].split("#")[0].strip("/").split("/")[0].strip().lower()
+    slug = slug.lstrip("@").strip()
     return slug if SLUG_RE.match(slug) else ""
 
 
@@ -556,7 +570,8 @@ class KickAPI:
     ) -> Tuple[int, Any]:
         """Perform one request and return ``(status, parsed_body)``."""
         await self.open()
-        assert self._session is not None  # just opened
+        if self._session is None:  # open() could not establish one
+            raise RuntimeError("KickAlerts: HTTP session is not available")
         async with self._session.request(
             method, url, params=params, data=data, headers=headers
         ) as response:

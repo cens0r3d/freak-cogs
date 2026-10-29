@@ -517,9 +517,11 @@ def exposed_fingerprint(headers: Mapping[str, Any]) -> List[str]:
 
 
 def hashes_of(data: bytes) -> Dict[str, str]:
+    # usedforsecurity=False: these are identifiers for a downloaded file, not a
+    # security boundary - MD5/SHA1 are here because other services publish them.
     return {
-        "md5": hashlib.md5(data).hexdigest(),
-        "sha1": hashlib.sha1(data).hexdigest(),
+        "md5": hashlib.md5(data, usedforsecurity=False).hexdigest(),
+        "sha1": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
 

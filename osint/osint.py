@@ -1710,7 +1710,7 @@ class OSINT(commands.Cog):
             raise OSINTError("Das sieht nicht nach einer E-Mail-Adresse aus.")
 
         digest = md5(
-            address.encode()
+            address.encode(), usedforsecurity=False
         ).hexdigest()  # noqa: S324 - the Gravatar API requires MD5
         status, payload, _ = await self._fetch(
             "gravatar", GRAVATAR.format(digest=digest)

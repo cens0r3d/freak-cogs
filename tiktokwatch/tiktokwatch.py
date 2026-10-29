@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import aiohttp
 import discord
@@ -203,10 +204,18 @@ def clean_handle(value: Any) -> Optional[str]:
     if not text:
         return None
     text = text.split("?")[0].split("#")[0].rstrip("/")
-    if "tiktok.com" in text:
-        part = text.split("tiktok.com/", 1)[-1]
-        part = part.lstrip("@").split("/")[0]
-        text = part
+    lowered = text.lower()
+    if "://" in text or lowered.startswith(
+        ("tiktok.com", "www.tiktok.com", "vm.tiktok.com")
+    ):
+        # Parse the host instead of searching the string for "tiktok.com": a
+        # substring check also accepts tiktok.com.example.org (CodeQL
+        # py/incomplete-url-substring-sanitization).
+        parts = urlsplit(text if "://" in text else "https://" + text)
+        host = (parts.hostname or "").lower()
+        if host != "tiktok.com" and not host.endswith(".tiktok.com"):
+            return None
+        text = parts.path.lstrip("/").lstrip("@").split("/")[0]
     match = HANDLE_RE.match(text.lstrip("@"))
     if not match:
         return None

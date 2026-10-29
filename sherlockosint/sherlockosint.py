@@ -131,7 +131,9 @@ class SherlockOsint(commands.Cog):
                     try:
                         body = await resp.text(errors="ignore")
                     except Exception:
-                        pass
+                        # The status code already decided the verdict; the body is
+                        # only used for the optional message check.
+                        log.debug("could not read the response body", exc_info=True)
                     if error_msg and isinstance(error_msg, str):
                         if error_msg in body:
                             result["found"] = False

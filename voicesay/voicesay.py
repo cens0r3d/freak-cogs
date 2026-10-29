@@ -189,7 +189,7 @@ class VoiceSay(commands.Cog):
         try:
             return self._parse_ogg_duration(ogg_bytes)
         except Exception:
-            pass
+            log.debug("Ogg granule duration parse failed", exc_info=True)
 
         return 1.0
 
