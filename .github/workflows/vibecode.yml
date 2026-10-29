@@ -1,0 +1,28 @@
+name: Update Vibecode Badge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/.vibecode
+  workflow_dispatch:
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Generate badge
+        run: python .github/vibecode.py
+      - name: Commit badge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/vibecode.svg
+          git diff --cached --quiet || git commit -m "update vibecode badge"
+          git push

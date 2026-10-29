@@ -3,8 +3,16 @@
 [![Bandit](https://github.com/cens0r3d/freak-cogs/actions/workflows/bandit.yml/badge.svg)](https://github.com/cens0r3d/freak-cogs/actions/workflows/bandit.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Red 3.5.0+](https://img.shields.io/badge/Red-3.5.0%2B-7B68EE.svg)](https://github.com/Cog-Creators/Red-DiscordBot)
+[![discord.py 2.x](https://img.shields.io/badge/discord.py-2.x-5865F2.svg)](https://github.com/Rapptz/discord.py)
+
+[![vibe-coded](.github/vibecode.svg)](.github/.vibecode)
+[![Built with DeepSeek](https://vibecoded.fyi/badges/flat/llms/deepseek.svg)](https://vibecoded.fyi/)
 
 Red-DiscordBot cogs by [cens0r3d](https://github.com/cens0r3d).
+
+Most of the code was written together with DeepSeek, then reviewed, tested against a
+running bot and fixed by hand. The badge number is a self-report — it lives in
+[`.github/.vibecode`](.github/.vibecode) and the workflow next to it rebuilds the image.
 
 ## Install
 
