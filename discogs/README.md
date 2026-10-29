@@ -6,7 +6,7 @@ to open its tracklist, credits, identifiers, community rating and marketplace
 price, then page through as many pressings or records as you like.
 
 **No API key and no token required** — the API answers anonymously. A free user
-token only raises the rate limit from 25 to 60 requests per minute.
+token only raises the rate limit.
 
 ```
 [p]discogs daft punk
@@ -24,7 +24,7 @@ token only raises the rate limit from 25 to 60 requests per minute.
 [p]load discogs
 ```
 
-No requirements beyond Red itself — the cog uses `aiohttp`, which ships with Red.
+No requirements beyond Red itself.
 
 ## Commands
 
@@ -45,8 +45,8 @@ No requirements beyond Red itself — the cog uses `aiohttp`, which ships with R
 | `[p]discogs set …` | Per-server settings (Manage Server) |
 
 `release`, `master`, `artist`, `label` and `versions` accept a **numeric ID** or
-a **name/title**, which is searched first and the first hit used. An ID is exact
-and costs one request, a name is a guess — use the ID when you know it.
+a **name/title**, which is searched first and the first hit used. Use the ID when
+you know it — it is exact.
 
 ## Search flags
 
@@ -62,59 +62,19 @@ and costs one request, a name is a guess — use the ID when you know it.
 | `--artist` | Artist name as text |
 | `--catno` | Catalogue number |
 | `--sort` | `year`, `artist`, `title`, `label`, `catno`, `format`, `rating`, `added`, `want` |
-| `--limit` | Results per page, 1–25 (default comes from `[p]discogs set perpage`) |
+| `--limit` | Results per page, 1–25 (default from `[p]discogs set perpage`) |
 
 `top` takes `--genre`, `--style`, `--year`, `--country`; `random` takes those
-plus `--decade` (`60s`, `1990s`). Quote anything that contains a space:
-
-```
-[p]discogs search --style "Detroit Techno" --year 1993
-[p]discogs top --genre Techno --year 1995
-```
-
+plus `--decade` (`60s`, `1990s`). Quote anything that contains a space.
 Unknown flags are refused by name instead of quietly ending up in the query.
 
 ## Genres and styles
 
-Discogs separates **15 genres** (`Electronic`, `Jazz`, `Rock`, `Funk / Soul`,
-`Folk, World, & Country`, `Hip Hop`, `Pop`, `Classical`, `Latin`, `Reggae`,
-`Blues`, `Stage & Screen`, `Non-Music`, `Brass & Military`, `Children's`) from
-hundreds of **styles** (`Techno`, `House`, `Ambient`, `Synth-pop`, …).
-
-Filtering `genre=Techno` does not error — it returns zero results. So when the
-value behind `--genre` is not one of the 15, the cog sends it as `--style`
-instead and says so in the footer. `--genre Electronic --style Techno` is the
-precise form.
-
-## The interactive views
-
-- Result lists show numbered rows with year, country, format, label and
-  want/have counts. **Previous/Next** page through the results, the **picker**
-  opens the highlighted entry, **Open on Discogs** leaves Discord.
-- Detail views page through long tracklists, credits and profiles instead of
-  truncating them, and carry the same Discogs link.
-- An artist or label detail has a **Releases** button (its whole catalogue, page
-  by page); a master has **Versions** (every pressing with country, format and
-  catalogue number).
-- Buttons answer for 10 minutes. After a restart or reload a stale button still
-  replies — with "that list has expired, run the command again" — instead of
-  failing silently.
-
-## Rate limits, caching and the token
-
-- Anonymous requests are limited to **25 per minute**, a user token raises that
-  to **60**. The cog reads `X-Discogs-Ratelimit` from every response, keeps a
-  sliding one-minute window and **waits** instead of collecting `429`s; a `429`
-  that does arrive triggers a backoff and one retry.
-- Responses are cached in memory: **5 minutes** for searches, **30 minutes** for
-  releases, artists, labels and masters. Paging back and forth costs nothing.
-  `[p]discogs clearcache` drops it.
-- A token is optional. Generate one at
-  <https://www.discogs.com/settings/developers> ("Generate new token"), then:
-  - `[p]discogs token` (bot owner) opens Red's secure form, or
-  - `[p]set api discogs token,<token>`.
-  Both take effect immediately — no reload. `[p]discogs status` shows whether a
-  token is in use and how much of the minute's budget is left.
+Discogs separates 15 **genres** (`Electronic`, `Jazz`, `Rock`, `Funk / Soul`,
+`Hip Hop`, `Pop`, `Classical`, …) from hundreds of **styles** (`Techno`, `House`,
+`Ambient`, `Synth-pop`, …). A style behind `--genre` would simply return nothing,
+so the cog sends a non-genre value as `--style` and says so in the footer.
+`--genre Electronic --style Techno` is the precise form.
 
 ## Settings
 
@@ -127,25 +87,28 @@ precise form.
 | `thumbnails <true\|false>` | `true` | Cover images in detail views |
 | `show` | — | Show the current settings |
 
-## Data and privacy
+## Token and limits
 
-Guild settings only (results per page, currency, thumbnails) are stored, in
-Red's Config. Search queries and Discogs responses are cached **in memory** and
-dropped when the bot restarts; nothing about Discord users is stored. Queries go
-to `api.discogs.com` with a `freak-cogs-discogs` user agent from the bot host,
-so that host's IP is visible to Discogs. An optional token lives in Red's shared
-API token store. `[p]mydata` therefore returns nothing for this cog.
+Anonymous requests allow 25 requests per minute, a token 60 — the cog waits
+instead of collecting `429`s. Responses are cached in memory (5 minutes for
+searches, 30 for releases, artists, labels and masters), so paging costs nothing.
+
+A token is optional: generate one at
+<https://www.discogs.com/settings/developers> ("Generate new token"), then
+`[p]discogs token` (owner, opens Red's secure form) or
+`[p]set api discogs token,<token>`. Both take effect immediately.
+
+Only guild settings are stored; queries go to `api.discogs.com` from the bot host.
 
 ## Troubleshooting
 
-- **"Slow down a moment"** — the minute's budget is used up. Wait ~30 seconds;
-  a token triples the budget. `[p]discogs status` shows the window.
+- **"Slow down a moment"** — the minute's budget is used up. Wait ~30 seconds.
+  `[p]discogs status` shows the window.
 - **"Nothing found"** — try fewer filters. `--format Vinyl --country UK` on a
-  digital-only release is a guaranteed miss, and a style typed as `--genre` is
-  auto-corrected but still narrow.
-- **No cover images** — either `[p]discogs set thumbnails false`, or Discogs has
-  no image on that entry. Images are signed URLs; they cannot be rebuilt.
+  digital-only release is a guaranteed miss.
+- **No cover images** — either `set thumbnails false`, or Discogs has no image on
+  that entry.
 - **A release sounds wrong** — a master (#96559) is the *record*, a release
   (#249504) is one pressing. `[p]discogs versions` lists them all.
-- **The bot restarted and a button is dead** — run the command again; the view
-  data lives in memory, not on disk.
+- **A button is dead after a restart** — run the command again; buttons live 10
+  minutes and their data is in memory, not on disk.

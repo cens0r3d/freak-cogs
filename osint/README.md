@@ -1,7 +1,8 @@
 # osint
 
-Passive infrastructure reconnaissance for Red-DiscordBot. Everything
-it does reads public sources — nothing is scanned, probed or brute-forced.
+Passive infrastructure reconnaissance. Everything comes from public sources —
+nothing is scanned, probed or brute-forced. **No extra requirements**: the cog
+uses `aiohttp`, which ships with Red.
 
 | Command | What it does |
 | --- | --- |
@@ -17,13 +18,3 @@ it does reads public sources — nothing is scanned, probed or brute-forced.
 | `[p]osint sources` | Every external service contacted, with its limits |
 | `[p]osint status` | The settings for this server |
 | `[p]osint set …` | Channel list, cooldown, audit log, provider cache |
-
-The folder is called `osint` and contains three modules:
-
-* `osint.py` — the cog, commands, HTTP layer, report builders
-* `parsers.py` — pure stdlib: target classification, DoH/RDAP shaping, SPF/DMARC,
-  security-header grading, EXIF/TIFF, PNG chunks, PDF info
-
-There are **no requirements** — the cog uses `aiohttp`, which ships with Red, so
-`[p]cog update` costs nothing on the bot host.
-

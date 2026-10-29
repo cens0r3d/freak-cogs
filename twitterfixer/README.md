@@ -1,40 +1,24 @@
 # twitterfixer
 
-> **Fork / archive.** The original cog was published by **tombly**; that
-> repository has been deleted. This copy is archived here so the code is not
-> lost. Only `info.json` was rewritten — the logic is untouched.
+> **Fork / archive.** Original by **tombly**; that repository has been deleted.
+> Archived here so the code is not lost — only `info.json` was rewritten.
 
-Replaces Twitter and X links with an embed built from the vxtwitter API, so
-posts render with text, author, date and engagement numbers instead of a bare
-link or a broken preview.
+Replaces Twitter and X links with an embed, so posts render with text, author,
+date and engagement numbers instead of a bare link or a broken preview. Photos
+are attached, videos and GIFs are re-encoded and attached as files. If a file is
+too large for the server, the message is replaced by a plain `vxtwitter.com`
+link instead.
 
-There are **no commands**. The cog is a listener: it reacts to messages that
-contain a Twitter/X status URL.
-
-## What happens to a link
-
-| Step | Detail |
-| --- | --- |
-| Detect | Regex over `twitter.com` and `x.com` status URLs, text messages only |
-| Skip | Bots, DMs, and members without *Embed Links* |
-| Fetch | Metadata from `api.vxtwitter.com` |
-| Embed | Author, text, timestamp, thumbnail, likes / retweets / replies |
-| Media | Photos are attached, videos and GIFs re-encoded with `ffmpeg` |
-| Fallback | If the re-encoded file exceeds the server limit, the original message is replaced by a `vxtwitter.com` link |
-
-The bot needs **Manage Messages** to delete its own placeholder embed, and
-**Embed Links** in the channel.
+There are **no commands** — the cog is a listener for messages containing a
+Twitter/X status URL.
 
 ## Requirements
 
 * `ffmpy` (Python package, installed by `[p]cog install`)
 * `ffmpeg` on the host — `apt install ffmpeg`. Without it, re-encoding fails and
   only the metadata embed is sent.
-
-## Data source
-
-`https://api.vxtwitter.com/status/<id>` — public, key-free. The link and its
-metadata are sent there; the bot host's IP is visible to that service.
+* **Manage Messages** for the bot (to replace its own placeholder) and
+  **Embed Links** in the channel; the author needs *Embed Links* too.
 
 ## Troubleshooting
 
@@ -44,8 +28,7 @@ metadata are sent there; the bot host's IP is visible to that service.
   URL expired before download.
 * **A plain vxtwitter link shows up** — that is the intended fallback for files
   above the upload limit, not an error.
-* **Works in one channel, not another** — channel permissions differ. Check the
-  bot's *Manage Messages* there.
+* **Works in one channel, not another** — check the bot's *Manage Messages* there.
 * **Duplicate embeds after an edit** — Discord's own preview is cached; the cog
   only acts on new messages.
 

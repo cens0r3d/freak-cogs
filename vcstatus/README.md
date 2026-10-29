@@ -32,7 +32,7 @@ Every command needs **Manage Channels** on the server.
 | `[p]vcstatus channel <#voice> <text>` | Status message for one specific channel |
 | `[p]vcstatus remove [#voice]` | Drop one channel's override; without a channel it resets the default message, the empty-channel setting and every override |
 | `[p]vcstatus empty [#voice] [on\|off\|reset]` | What an empty channel shows — server-wide (no channel) or per channel |
-| `[p]vcstatus resync` | Force a re-push to every voice channel |
+| `[p]vcstatus resync` | Force a re-push to every voice channel — the first thing to try when a status looks stale |
 | `[p]vcstatus show` | Current configuration of this server |
 
 ## Placeholder and limits
@@ -57,26 +57,6 @@ channel carries no text at all.
 
 A per-channel setting always wins over the server-wide default.
 
-## How it works
-
-- Discord has no way to **read** a voice channel status back, and discord.py
-  exposes no `voice_status` attribute. The bot therefore writes the status
-  through the dedicated route (`PUT /channels/{id}/voice-status`, with a
-  nullable `status` field, where `null` clears it) and remembers what it pushed
-  in memory. An unchanged value is skipped, so idle channels cost no requests.
-- Updates are **debounced by about two seconds**: a burst of joins, leaves and
-  moves collapses into one request per channel. The route is rate limited per
-  route, and a busy channel would otherwise hit it.
-- A move updates **both** channels — the one left behind and the one joined.
-- `resync` clears the remembered values and re-pushes everything, spaced a
-  quarter second apart. It does not change any setting, which makes it the first
-  thing to try when a status looks stale.
-- Only channels where the bot has **Manage Channels** are touched; everything
-  else is skipped silently.
-- Failures never abort the handler: a rejected request is logged (a 403 names
-  the missing permission) and the value is not cached, so the next event retries.
-- Deleting a voice channel drops its cached entry and its queued update.
-
 ## Permissions
 
 - **Set Voice Channel Status** — the permission the status field itself needs.
@@ -88,22 +68,5 @@ A per-channel setting always wins over the server-wide default.
 
 A 403 in the log always means one of those two is missing for that channel
 (usually because a category overwrites the permissions of the channel).
-
-## Data
-
-Nothing is stored per user. Every setting is guild level and lives in Red's
-Config: the enabled flag, the default message, the empty-channel default, the
-per-channel messages and the per-channel empty flags. The status cache and the
-debounce timers exist only in memory and are gone after a restart — the next
-join, leave or `[p]vcstatus resync` fills them again.
-
-## Files
-
-| File | Contents |
-| --- | --- |
-| `vcstatus.py` | The whole cog: config, commands, listener, debounce and the raw status write |
-| `info.json` | Cog metadata |
-
-## Credits
 
 MIT — see the repository's [LICENSE](../LICENSE).

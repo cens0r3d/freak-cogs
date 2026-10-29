@@ -1,6 +1,6 @@
 # IdleRPG
 
-The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Red-DiscordBot cog.
+The IRC classic [idlerpg.net](https://www.idlerpg.net/) as a Discord cog.
 Register a character and it levels purely by idling: every level-up finds an
 item, and the level-up may start a battle against anyone else present. No IRC
 server, no password — the Discord account *is* the login, and **every guild is
@@ -27,13 +27,10 @@ No requirements — the cog only uses what Red already ships.
 [p]irpg char                    # your sheet: level, progress, all ten slots
 ```
 
-The panel carries four buttons — **Join** (a modal asking for name and class),
-**Character**, **Leaderboard**, **Realm** — and answers ephemerally. It keeps
-working after a restart, so one panel per server is enough.
+The panel carries four buttons — **Join** (name and class via modal),
+**Character**, **Leaderboard**, **Realm** — and keeps working after a restart.
 
 ## Commands
-
-Player commands:
 
 | Command | What it does |
 | --- | --- |
@@ -45,14 +42,9 @@ Player commands:
 | `[p]irpg top [page]` | Leaderboard, paginated (aliases: `leaderboard`, `rank`) |
 | `[p]irpg realm` | Realm overview: characters, present players, top three, quest (alias: `status`) |
 | `[p]irpg quest` | Active quest, its members and remaining time |
-
-Needs **Manage Server**:
-
-| Command | What it does |
-| --- | --- |
-| `[p]irpg panel [#channel]` | Post the button panel |
-| `[p]irpg set <setting> <value>` | Change one rule (alias: `settings`, no argument shows the current config) |
-| `[p]irpg admin hog [@member]` | Summon the Hand of God (alias: `handofgod`) |
+| `[p]irpg panel [#channel]` | Post the button panel (**Manage Server**) |
+| `[p]irpg set <setting> <value>` | Change one rule (**Manage Server**; alias `settings`, no argument shows the config) |
+| `[p]irpg admin hog [@member]` | Hand of God (alias: `handofgod`) |
 | `[p]irpg admin level <@member> <n>` | Set a character's level |
 | `[p]irpg admin ttl <@member> <seconds>` | Shift the time to the next level (negative = faster) |
 | `[p]irpg admin remove <@member>` | Delete a character (alias: `delete`) |
@@ -68,85 +60,43 @@ Needs **Manage Server**:
 | `base <seconds>` | `300` | Base time for level 1 |
 | `growth <factor>` | `1.14` | Growth per level |
 | `maxlevel <n>` | `120` | Highest reachable level |
-| `battles` | on | Duels on level-up |
-| `npc` | on | Fight the Shadow of the Realm when nobody else is around |
-| `events` | on | Hand of God, godsends, calamities, team battles |
-| `quests` | on | Automatic quests for idle players |
-| `uniques` | on | The eight unique items |
+| `battles` / `npc` / `events` / `quests` / `uniques` | on | Duels, the Shadow of the Realm, fate events, auto quests, the eight unique items |
 | `penalty <seconds>` | `1` | Time cost per message character, `0` = talking is free |
 | `penaltycap <chars>` | `60` | Characters of a message counted at most |
 | `announce` | on | Announce level-ups, fights, quests and fate in the channel |
 | `reset` | — | Wipe all characters and reset every setting, asks first |
 
-## How the game works
+## The rules
 
-**Levelling.** A character levels by being in the guild. The time to the next
-level is `base × growth ^ level`; past level 50 it grows linearly by one day
-per level instead of exponentially. Nothing else is required — no voice
-channel, no command, no activity.
+- **Levelling.** Time to the next level is `base × growth ^ level`; past level 50
+  it grows by one day per level instead of exponentially. No voice, no command,
+  no activity needed.
+- **Talking costs time.** Every message adds `penalty × characters × 1.14 ^ level`
+  seconds. Commands are free, so using the cog never hurts. Silence is the best
+  strategy, as in the original.
+- **Items.** Ten slots (weapon, shield, helm, armor, gloves, leggings, boots,
+  ring, amulet, charm). Each level-up rolls one — the unique items first, then a
+  regular find weighted towards low levels. An item is equipped only if it beats
+  the current one.
+- **Battles.** A level-up may challenge another present character: below level 25
+  with 25 % chance, above always. Both sides roll up to their item sum, the
+  higher roll wins, and the outcome shifts the winner's or loser's remaining
+  time. Crits and item theft depend on alignment — good hits harder, evil crits
+  more often.
+- **Fate and quests.** Per character and day: Hand of God, godsend, calamity,
+  team battles. Quests start on their own once enough characters have the
+  required level and idle time; a single message from a quester fails it for
+  everyone.
 
-**Talking costs time.** Every message from a registered member adds
-`penalty × characters × 1.14 ^ level` seconds to their next level, capped at
-`penaltycap` characters. Command invocations are free, so using the cog never
-hurts the player. Silence is the best strategy, exactly as in the original.
+## Data and permissions
 
-**Items.** Ten slots (weapon, shield, helm, armor, gloves, leggings, boots,
-ring, amulet, charm). Each level-up rolls one item: first the eight unique
-items (1/40 per eligible level-up), then a regular find up to `1.5 × level`,
-weighted `1 / 1.4 ^ n` — low levels are common, high ones are rare. An item is
-equipped only if it beats the current one.
+One character per member is stored per guild — nothing leaves the host.
+`[p]mydata` exports it as JSON, `[p]mydata forgetme` or `[p]irpg unregister`
+deletes it.
 
-**Battles.** A level-up may challenge another present character: below level 25
-with a 25 % chance, from level 25 on always. Each side rolls a random number up
-to the sum of its item levels; the higher roll wins. Winning takes at least 7 %
-off the winner's remaining time (more against higher-level opponents), losing
-adds at least 7 %. A win crits with 1/50 (good), 1/35 (neutral) or 1/20 (evil)
-and then also penalises the loser; a win can steal one better item (≈ 2 %).
-
-**Alignment.** Good: +10 % item sum in battles, but rare crits. Evil: −10 % item
-sum, but crits at 1/20. Neutral: neither.
-
-**Fate.** Per online character and day: Hand of God (1/20, 80 % helpful, shifts
-5–75 % of the remaining time), godsend and calamity (1/8 each, 5–12 % of the
-time or ±10 % on one item), team battle (5 %, needs six present characters).
-
-**Quests.** Once enough characters have the required level and idle time, a
-quest starts on its own (default: three characters, level 20+, six hours idled,
-6–12 hours duration). It fails as soon as one participant takes a penalty — a
-single message is enough — and then every present player pays the realm
-penalty. Succeed and each quester drops 25 % of their remaining time.
-
-## Data and privacy
-
-One character per member is stored per guild: name, class, alignment, level,
-remaining time, equipped items, counters (wins, losses, crits, steals,
-penalties, idle time) and timestamps. Nothing leaves the host and nothing is
-sent to a third party. `[p]mydata` returns the stored data as a JSON file,
-`[p]mydata forgetme` deletes it, and `[p]irpg unregister` removes the character
-as well.
-
-Item names are derived from slot, level and a stored variant instead of being
-saved as text, so the name tables can change without old saves keeping stale
-names. Characters are written back every 60 seconds and when the cog unloads,
-not on every tick, so a busy server does not hammer the config. A character whose
-member leaves the server keeps its progress but stops accumulating time.
-
-## Permissions
-
-- **Send Messages** and **Embed Links** in the announcement channel.
-- **Manage Roles** only if `[p]irpg set role` is used, with the bot's role above
-  the one it hands out.
-- The panel needs no permissions beyond sending messages and embeds.
-
-## Files
-
-| File | Contents |
-| --- | --- |
-| `idlerpg.py` | The cog: config, listener, tick, commands, embeds, panel |
-| `game.py` | Pure rules without `discord`/`redbot` imports: formulas, item rolls, combat, fate probabilities, serialization |
-
-Keeping the rules separate is deliberate — `game.py` can be driven by a test
-harness with the real interpreter, without a bot token or a Discord connection.
+The bot needs **Send Messages** and **Embed Links** in the announcement channel,
+and **Manage Roles** only if `[p]irpg set role` is used (the bot's role must sit
+above the one it hands out).
 
 ## Credits
 
