@@ -1,5 +1,9 @@
 # freak-cogs
 
+[![Bandit](https://github.com/cens0r3d/freak-cogs/actions/workflows/bandit.yml/badge.svg)](https://github.com/cens0r3d/freak-cogs/actions/workflows/bandit.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Red 3.5.0+](https://img.shields.io/badge/Red-3.5.0%2B-7B68EE.svg)](https://github.com/Cog-Creators/Red-DiscordBot)
+
 Red-DiscordBot cogs by [cens0r3d](https://github.com/cens0r3d).
 
 ## Install
@@ -39,6 +43,9 @@ Some cogs want extra permissions, `ffmpeg`, or API credentials — each cog READ
 
 ## Credits
 
+- **goabase.net** — the party data, published under
+  [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/). The share-alike
+  credit is carried in every party embed.
 - **tombly** — original author of TwitterFixer.
 - **unnamed** — original author of SherlockOSINT.
 - **DeepSeek** (`deepseek-v4.1-flash`) — pair-programmed the cogs.
