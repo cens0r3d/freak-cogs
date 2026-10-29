@@ -10,8 +10,7 @@
 Red-DiscordBot cogs by [cens0r3d](https://github.com/cens0r3d).
 
 Most of the code was written together with DeepSeek, then reviewed, tested against a
-running bot and fixed by hand. The badge number is a self-report — it lives in
-[`.github/.vibecode`](.github/.vibecode) and the workflow next to it rebuilds the image.
+running bot and fixed by hand.
 
 ## Install
 
