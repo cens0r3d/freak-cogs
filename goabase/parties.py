@@ -152,8 +152,24 @@ _FILLER_WORDS = {
 }
 
 
-#: Regional-indicator pairs (country flags) glued to act names by organisers.
-_FLAGS = re.compile("[\U0001f1e6-\U0001f1ff\ufe0f\U0001f3f4\U000e0061-\U000e007f]")
+def _is_flag_codepoint(codepoint: int) -> bool:
+    """Characters that build an emoji flag rather than name an act.
+
+    A character class written as ``[\U0001f1e6-\U0001f1ff...]`` reads as an
+    overlapping range to static analysers (CodeQL: ``py/overly-large-range``),
+    and the ranges are the one thing in this module that cannot be read at a
+    glance. Comparing code points says the same thing without the ambiguity.
+    """
+    return (
+        0x1F1E6 <= codepoint <= 0x1F1FF  # regional indicator letters (country flags)
+        or codepoint == 0x1F3F4  # black flag, basis of subdivision flags
+        or 0xE0061 <= codepoint <= 0xE007F  # tag characters of subdivision flags
+        or codepoint == 0xFE0F  # variation selector-16
+    )
+
+
+def _strip_flags(text: str) -> str:
+    return "".join(char for char in text if not _is_flag_codepoint(ord(char)))
 
 
 def _alnum_ratio(text: str) -> float:
@@ -170,7 +186,7 @@ def _candidate_name(chunk: str) -> Optional[str]:
         return None
     name = _LABEL_PREFIX.sub("", name)
     name = _TIME_PREFIX.sub("", name)
-    name = _FLAGS.sub("", name)
+    name = _strip_flags(name)
     name = name.strip(_DECORATION)
     name = re.sub(r"\s{2,}", " ", name)
     if not 2 <= len(name) <= 48:
