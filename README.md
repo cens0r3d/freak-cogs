@@ -4,7 +4,6 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Red 3.5.0+](https://img.shields.io/badge/Red-3.5.0%2B-7B68EE.svg)](https://github.com/Cog-Creators/Red-DiscordBot)
 [![discord.py 2.x](https://img.shields.io/badge/discord.py-2.x-5865F2.svg)](https://github.com/Rapptz/discord.py)
-
 [![vibe-coded](.github/vibecode.svg)](.github/.vibecode)
 [![Built with DeepSeek](https://vibecoded.fyi/badges/flat/llms/deepseek.svg)](https://vibecoded.fyi/)
 
