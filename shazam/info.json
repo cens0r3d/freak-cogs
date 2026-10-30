@@ -1,0 +1,13 @@
+{
+  "author": ["cens0r3d"],
+  "install_msg": "shazam geladen. `[p]shazam` mit Datei, als Reply oder mit Media-URL aufrufen. `debug` als letztes Wort zeigt, welche Fenster probiert wurden.",
+  "name": "shazam",
+  "short": "Song-Erkennung per Shazam (Neufassung)",
+  "description": "Erkennt Songs aus hochgeladenen Dateien, aus Nachrichten, auf die geantwortet wird, oder aus direkten Media-Links. Probiert drei Ausschnitte, liest die rohe Shazam-Antwort und beantwortet jeden Fehlerfall mit einem Satz statt mit einem Traceback.",
+  "tags": ["music", "audio", "shazam"],
+  "requirements": ["shazamio", "pydub"],
+  "min_bot_version": "3.5.0",
+  "hidden": false,
+  "disabled": false,
+  "type": "COG"
+}

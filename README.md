@@ -36,6 +36,7 @@ running bot and fixed by hand.
 | [idlerpg](idlerpg/README.md) | idlerpg.net as a Discord game — level up by idling. |
 | [discogs](discogs/README.md) | Discogs browser: releases, masters, artists, labels, prices. |
 | [bandcamp](bandcamp/README.md) | Bandcamp browser: search, discographies, tracklists, lyrics. |
+| [shazam](shazam/README.md) | Song recognition for audio and video - attachments, replies and media URLs. |
 | [goabase](goabase/README.md) | Goa/Psytrance party feed from goabase.net. |
 | [dbd](deadbydaylight/README.md) | Dead by Daylight data: killers, survivors, perks, items, maps. |
 | [psychonaut](psychonaut/README.md) | PsychonautWiki reference: substance class, doses, duration, effects. |
