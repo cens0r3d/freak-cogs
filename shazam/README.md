@@ -7,6 +7,7 @@ Song recognition for Discord, built on [shazamio](https://github.com/shazamio/Sh
 | `[p]shazam` | recognize the attached file, the message you replied to, or a media URL |
 | `[p]shazam <url>` | recognize a direct audio or video URL |
 | `[p]shazam <url> debug` | same, plus the windows that were tried, in the footer |
+| `/shazam` | the same as a slash command: pick a file, paste a url, or leave both |
 | `[p]shazamver` | version of the cog and of shazamio |
 
 Attach a file, reply to a message that has one, or pass a URL that points

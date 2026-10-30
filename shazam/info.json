@@ -1,6 +1,6 @@
 {
   "author": ["cens0r3d"],
-  "install_msg": "shazam loaded. Use `[p]shazam` with a file attached, as a reply, or with a media URL. Add `debug` as the last word to see which windows were tried.",
+  "install_msg": "shazam loaded. Use `[p]shazam` with a file attached, as a reply, or with a media URL, or the `/shazam` slash command. Add `debug` as the last word to see which windows were tried. Run `[p]slash sync` once to publish the slash command.",
   "name": "shazam",
   "short": "Song recognition via Shazam",
   "description": "Recognizes songs from uploaded files, from messages you reply to, or from direct media URLs. Tries three windows, reads the raw Shazam payload and answers every failure with a sentence instead of a traceback.",

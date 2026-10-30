@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 import discord
 from pydub import AudioSegment
-from redbot.core import commands
+from redbot.core import app_commands, commands
 from redbot.core.bot import Red
 from shazamio import Shazam as ShazamLib
 from shazamio.api import SearchParams
@@ -42,6 +42,7 @@ def _lib_version() -> str:
     except PackageNotFoundError:  # pragma: no cover - only without the package
         return "?"
 
+MAX_BYTES = 25 * 1024 * 1024
 AUDIO_TYPES = ("audio/", "video/")
 MEDIA_CTYPES = {
     "application/octet-stream",
@@ -228,6 +229,25 @@ class Shazam(commands.Cog):
             raise NotMedia("that file is larger than 25 MB")
         return await attachment.read()
 
+    async def _run(
+        self, data: bytes, debug: bool
+    ) -> Tuple[Optional[Dict[str, Any]], List[str], Optional[str]]:
+        """(track, notes, problem) - problem is a sentence ready for the user."""
+        try:
+            track, notes = await self.recognition.recognize(data, debug=debug)
+            return track, notes, None
+        except NotMedia as error:
+            return None, [], "That is nothing I can listen to: {}.".format(error)
+        except NoMatch as error:
+            return None, [], "I could not recognize any song. Tried: {}.".format(
+                str(error).replace(" | ", ", ")
+            )
+        except Exception as error:  # noqa: BLE001 - never a traceback in chat
+            log.exception("shazam failed")
+            return None, [], "Recognition failed ({}). Try again in a moment.".format(
+                type(error).__name__
+            )
+
     # -- Befehle -----------------------------------------------------------
     @commands.command(name="shazam", aliases=["sht"])
     @commands.guild_only()
@@ -245,25 +265,59 @@ class Shazam(commands.Cog):
         async with ctx.typing():
             try:
                 data = await self._collect(ctx, url)
-                track, notes = await self.recognition.recognize(data, debug=debug)
             except NotMedia as error:
-                await ctx.reply("That is nothing I can listen to: {}.".format(error), mention_author=False)
-                return
-            except NoMatch as error:
                 await ctx.reply(
-                    "I could not recognize any song. Tried: {}.".format(str(error).replace(" | ", ", ")),
-                    mention_author=False,
+                    "That is nothing I can listen to: {}.".format(error), mention_author=False
                 )
                 return
-            except Exception as error:  # noqa: BLE001 - never a traceback in chat
-                log.exception("shazam failed")
-                await ctx.reply(
-                    "Recognition failed ({}). Try again in a moment.".format(type(error).__name__),
-                    mention_author=False,
-                )
-                return
+            track, notes, problem = await self._run(data, debug)
 
+        if problem:
+            await ctx.reply(problem, mention_author=False)
+            return
         await ctx.reply(embed=build_embed(track, notes), mention_author=False)
+
+    @app_commands.command(
+        name="shazam", description="Recognize the song in an audio or video file."
+    )
+    @app_commands.describe(
+        attachment="Audio or video file to listen to",
+        url="Direct link to an audio or video file",
+        debug="Show which windows were tried",
+    )
+    async def shazam_slash(
+        self,
+        interaction: discord.Interaction,
+        attachment: Optional[discord.Attachment] = None,
+        url: Optional[str] = None,
+        debug: bool = False,
+    ) -> None:
+        await interaction.response.defer(thinking=True)
+
+        try:
+            if attachment is not None:
+                if attachment.size > MAX_BYTES:
+                    raise NotMedia("that file is larger than 25 MB")
+                data = await attachment.read()
+            elif url:
+                data = await self.recognition.fetch(url)
+            else:
+                await interaction.followup.send(
+                    "Attach a file or pass a url - I cannot listen to nothing.",
+                    ephemeral=True,
+                )
+                return
+        except NotMedia as error:
+            await interaction.followup.send(
+                "That is nothing I can listen to: {}.".format(error), ephemeral=True
+            )
+            return
+
+        track, notes, problem = await self._run(data, debug)
+        if problem:
+            await interaction.followup.send(problem, ephemeral=True)
+            return
+        await interaction.followup.send(embed=build_embed(track, notes))
 
     @commands.command(name="shazamver")
     async def shazamver(self, ctx: commands.Context) -> None:
