@@ -39,7 +39,7 @@ log = logging.getLogger("red.freak_cogs.shazam")
 def _lib_version() -> str:
     try:
         return pkg_version("shazamio")
-    except PackageNotFoundError:  # pragma: no cover - nur ohne Installation
+    except PackageNotFoundError:  # pragma: no cover - only without the package
         return "?"
 
 AUDIO_TYPES = ("audio/", "video/")
@@ -63,8 +63,8 @@ class NoMatch(Exception):
 class Recognition:
     """Core recognition logic, independent of Discord."""
 
-    # 12 s ist die Fensterlaenge, die die Shazam-Apps selbst senden; shazamio 0.9.0
-    # warnt ausdruecklich, wenn man davon abweicht.
+    # 12 s is the window the Shazam apps themselves send; shazamio 0.9.0 warns
+    # explicitly when you deviate from it.
     def __init__(self, session: aiohttp.ClientSession, window: int = 12, attempts: int = 3):
         self.session = session
         self.window = window
@@ -92,7 +92,7 @@ class Recognition:
         the music only starts later in the clip.
         """
         span = max(1, min(int(total) if total else self.window, self.window))
-        # ein kuerzerer Clip wird ganz genommen, alles andere in 12-s-Fenstern
+        # a shorter clip is used whole, anything longer is cut into 12 s windows
         plan: List[Tuple[str, float, int]] = [("start", 0.0, span)]
         if total >= span + 5:
             middle = int(total / 3)
@@ -125,7 +125,7 @@ class Recognition:
         try:
             total = self.duration(data)
             notes.append("clip {:.1f}s".format(total))
-        except Exception as error:  # noqa: BLE001 - unlesbar: ein Versuch ohne Plan
+        except Exception as error:  # noqa: BLE001 - unreadable: one blind attempt
             raise NotMedia("I could not read any audio out of that file") from error
 
         for label, start, seconds in self.windows(total):
@@ -229,7 +229,7 @@ class Shazam(commands.Cog):
         return await attachment.read()
 
     # -- Befehle -----------------------------------------------------------
-    @commands.command(name="shazam", aliases=["sht", "wasistdas"])
+    @commands.command(name="shazam", aliases=["sht"])
     @commands.guild_only()
     async def shazam(self, ctx: commands.Context, *, url: Optional[str] = None) -> None:
         """Recognize the song in an audio or video file.
@@ -255,7 +255,7 @@ class Shazam(commands.Cog):
                     mention_author=False,
                 )
                 return
-            except Exception as error:  # noqa: BLE001 - nie ein Traceback im Channel
+            except Exception as error:  # noqa: BLE001 - never a traceback in chat
                 log.exception("shazam failed")
                 await ctx.reply(
                     "Recognition failed ({}). Try again in a moment.".format(type(error).__name__),
