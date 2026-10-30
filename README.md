@@ -55,6 +55,11 @@ Some cogs want extra permissions, `ffmpeg`, or API credentials — each cog READ
   credit is carried in every party embed.
 - **tombly** — original author of TwitterFixer.
 - **unnamed** — original author of SherlockOSINT.
+- **japandotorg** — original author of the `shazam` cog
+  ([Seina-Cogs](https://github.com/japandotorg/Seina-Cogs), MIT), which this repo's
+  `shazam` replaces. Recognition is done by
+  [shazamio](https://github.com/shazamio/ShazamIO) (MIT), talking to Shazam's
+  reverse-engineered API — not affiliated with Shazam.
 - **DeepSeek** (`deepseek-v4.1-flash`) — pair-programmed the cogs.
 
 ## License

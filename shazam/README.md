@@ -26,8 +26,3 @@ without notice; `shazamio` 0.9.0 or newer is required.
 | `that url returned text/html` | expired Discord link, reply with the file instead |
 | `could not read any audio` | image, text file or broken container |
 | `Recognition failed` | Shazam did not answer, try again in a moment |
-
-Credits: the original `shazam` cog comes from
-[Seina-Cogs](https://github.com/japandotorg/Seina-Cogs) by japandotorg (MIT).
-Recognition is [shazamio](https://github.com/shazamio/ShazamIO) (MIT). This cog
-is not affiliated with Shazam.
