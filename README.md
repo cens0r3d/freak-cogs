@@ -24,7 +24,7 @@ running bot and fixed by hand.
 
 | Cog | What it does |
 | --- | --- |
-| [vcstatus](vcstatus/README.md) | Status lines on voice channels, with a live member count. |
+| [vcstatus](vcstatus/README.md) | Status lines on voice channels, with a live member count and the music bot's current track. |
 | [kickalerts](kickalerts/README.md) | Kick.com livestream alerts, plus a stream summary with peak and average viewers. |
 | [tiktokwatch](tiktokwatch/README.md) | TikTok livestream and clip alerts. |
 | [voicesay](voicesay/README.md) | Sends an audio attachment as a native Discord voice message. |

@@ -1,7 +1,7 @@
 {
     "author": ["cens0r3d"],
     "name": "VCStatus",
-    "description": "Automatically set configurable status messages on voice channels when members join or leave. Supports per-channel messages, {count} placeholder for live member count, per-guild configuration.",
+    "description": "Automatically set configurable status messages on voice channels when members join or leave. Supports per-channel messages, {count} for the live member count, {track}/{author}/{requester} for what the music bot is playing, per-guild configuration.",
     "disabled": false,
     "end_user_data_statement": "This cog does not store any end user data. All settings are guild-specific and stored in Red's Config.",
     "hidden": false,

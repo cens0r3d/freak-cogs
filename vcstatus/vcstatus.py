@@ -10,18 +10,28 @@ Facts this cog is built around:
   coalesced instead of firing one request each.
 * It needs ``SET_VOICE_CHANNEL_STATUS``, plus ``MANAGE_CHANNELS`` while the bot
   is not connected to the channel.
+* The now-playing title comes from the Audio cog's own player
+  (``lavalink.get_player(guild_id).current``); the cog never talks to Lavalink
+  directly and a missing player simply means "nothing is playing".  Track
+  changes are announced through ``red_audio_track_*`` events, which carry no
+  guild object guarantee, so every handler re-reads it.
 """
 
 import asyncio
 import io
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import discord
 from discord.http import Route
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import bold, inline
+
+try:  # Ships with Red's Audio cog, but VCStatus must load without it.
+    import lavalink
+except ImportError:  # pragma: no cover - always present on a stock Red
+    lavalink = None
 
 log = logging.getLogger("red.freak_cogs.vcstatus")
 
@@ -31,8 +41,21 @@ DEBOUNCE_SECONDS = 2.0
 # Spacing between requests when re-pushing every channel at once.
 BULK_DELAY_SECONDS = 0.25
 
+# Discord's hard limit for the status field, counted on the *rendered* text.
+STATUS_LIMIT = 500
+
+# Placeholders that need the live player.  A template without one never
+# triggers a player lookup or reacts to a track change.
+TRACK_PLACEHOLDERS = ("{track}", "{author}", "{requester}")
+
 # Distinguishes "we never set anything here" from "we set it to nothing".
 UNKNOWN = object()
+
+
+def _uses_track(template: str) -> bool:
+    """Whether this template renders the current track."""
+    return any(placeholder in template for placeholder in TRACK_PLACEHOLDERS)
+
 
 _MODES = ("on", "off", "reset")
 
@@ -40,8 +63,9 @@ _MODES = ("on", "off", "reset")
 class VCStatus(commands.Cog):
     """Keep voice channel statuses in sync with the member count.
 
-    Supports per-channel messages, a ``{count}`` placeholder, and optionally
-    clearing the status while a channel is empty.
+    Supports per-channel messages, a ``{count}`` placeholder, ``{track}`` /
+    ``{author}`` / ``{requester}`` for whatever the music bot is playing, and
+    optionally clearing the status while a channel is empty.
     """
 
     def __init__(self, bot: Red) -> None:
@@ -58,6 +82,7 @@ class VCStatus(commands.Cog):
             enabled=False,
             default_message="{count} connected",
             clear_when_empty=False,
+            track_fallback="",
             channels={},
             channel_empty={},
         )
@@ -200,17 +225,40 @@ class VCStatus(commands.Cog):
     async def set_default(self, ctx: commands.Context, *, message: str) -> None:
         """Set the default status message.
 
-        Use ``{count}`` as a placeholder for the member count.
-        Maximum **500 characters**.
+        Placeholders: ``{count}`` for the human member count, ``{track}`` /
+        ``{author}`` / ``{requester}`` for whatever the music bot is playing.
+        Maximum **500 characters**, counted after the placeholders are filled.
 
-        Example: ``[p]vcstatus default {count} people here``
+        Example: ``[p]vcstatus default 🎵 {track} — {count} here``
         """
-        if len(message) > 500:
-            await ctx.send(f"Message too long ({len(message)}/500).")
+        if len(message) > STATUS_LIMIT:
+            await ctx.send(f"Message too long ({len(message)}/{STATUS_LIMIT}).")
             return
 
         await self.config.guild(ctx.guild).default_message.set(message)
         await ctx.send(f"Default status message set to:\n{inline(message)}")
+
+        if await self.config.guild(ctx.guild).enabled():
+            await self._apply_status_to_all(ctx.guild, force=True)
+
+    @vcstatus.command(name="fallback")
+    async def set_fallback(self, ctx: commands.Context, *, message: str = "") -> None:
+        """Set what the track placeholders show while nothing is playing.
+
+        Empty (the default) means the placeholder resolves to nothing, so a
+        text that is *only* a track placeholder clears the status instead of
+        leaving a stale title behind.
+
+        Example: ``[p]vcstatus fallback nothing playing``
+        """
+        if len(message) > STATUS_LIMIT:
+            await ctx.send(f"Fallback too long ({len(message)}/{STATUS_LIMIT}).")
+            return
+
+        await self.config.guild(ctx.guild).track_fallback.set(message)
+        await ctx.send(
+            f"Fallback for `{{track}}` set to: {inline(message) if message else '(empty)'}"
+        )
 
         if await self.config.guild(ctx.guild).enabled():
             await self._apply_status_to_all(ctx.guild, force=True)
@@ -225,17 +273,18 @@ class VCStatus(commands.Cog):
     ) -> None:
         """Set a custom status message for a specific voice channel.
 
-        Use ``{count}`` as a placeholder for the member count.
-        Maximum **500 characters**.
+        Placeholders: ``{count}`` for the human member count, ``{track}`` /
+        ``{author}`` / ``{requester}`` for whatever the music bot is playing.
+        Maximum **500 characters**, counted after the placeholders are filled.
 
-        Example: ``[p]vcstatus channel #general {count} playing``
+        Example: ``[p]vcstatus channel #general 🎮 {count} playing``
         """
         if channel.guild != ctx.guild:
             await ctx.send("That channel is not in this server.")
             return
 
-        if len(message) > 500:
-            await ctx.send(f"Message too long ({len(message)}/500).")
+        if len(message) > STATUS_LIMIT:
+            await ctx.send(f"Message too long ({len(message)}/{STATUS_LIMIT}).")
             return
 
         async with self.config.guild(ctx.guild).channels() as channels:
@@ -265,6 +314,7 @@ class VCStatus(commands.Cog):
         else:
             await self.config.guild(ctx.guild).default_message.set("{count} connected")
             await self.config.guild(ctx.guild).clear_when_empty.set(False)
+            await self.config.guild(ctx.guild).track_fallback.set("")
             await self.config.guild(ctx.guild).channels.set({})
             await self.config.guild(ctx.guild).channel_empty.set({})
             self._status_cache.clear()
@@ -285,6 +335,8 @@ class VCStatus(commands.Cog):
             f"**Default:** {inline(cfg['default_message'])}",
             f"**Empty channels:** "
             f"{'cleared' if cfg['clear_when_empty'] else 'keep the message'}",
+            f"**Track fallback:** "
+            f"{inline(cfg['track_fallback']) if cfg['track_fallback'] else '(empty - status is cleared)'}",
         ]
 
         overrides = [
@@ -300,6 +352,13 @@ class VCStatus(commands.Cog):
         if overrides:
             lines.append("")
             lines.extend(overrides)
+
+        track, _ = self._now_playing(ctx.guild)
+        lines.append("")
+        lines.append(
+            "**Now playing:** "
+            + (inline(track.title) if track and track.title else "nothing")
+        )
 
         await ctx.send("\n".join(lines))
 
@@ -331,6 +390,31 @@ class VCStatus(commands.Cog):
         if joined and isinstance(joined, discord.VoiceChannel):
             self._queue_update(joined)
 
+    # -- Audio cog hooks ------------------------------------------------
+    # Red dispatches these when a track starts, ends, the queue runs dry or
+    # the player disconnects.  They are plain module dispatches, so the guild
+    # can be missing; every handler tolerates that instead of raising.
+
+    @commands.Cog.listener()
+    async def on_red_audio_track_start(self, guild, track, requester) -> None:
+        """A new track started - re-render every channel that shows one."""
+        await self._refresh_track(guild)
+
+    @commands.Cog.listener()
+    async def on_red_audio_track_end(self, guild, track, requester) -> None:
+        """Track finished or was skipped; the next one follows immediately."""
+        await self._refresh_track(guild)
+
+    @commands.Cog.listener()
+    async def on_red_audio_queue_end(self, guild, track, requester) -> None:
+        """Nothing left to play - fall back to the idle text."""
+        await self._refresh_track(guild)
+
+    @commands.Cog.listener()
+    async def on_red_audio_audio_disconnect(self, guild) -> None:
+        """The player left the voice channel; the title is gone with it."""
+        await self._refresh_track(guild)
+
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         """Drop cached state for a deleted channel."""
@@ -342,6 +426,78 @@ class VCStatus(commands.Cog):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _refresh_track(self, guild: Optional[discord.Guild]) -> None:
+        """Queue an update for every channel whose text shows the track.
+
+        Track events arrive in pairs on a skip (end then start), so they go
+        through the same per-channel debounce as join/leave.  Channels without
+        a track placeholder are skipped before a request is even built, and the
+        status cache keeps a channel whose text did not change silent.
+        """
+        if not isinstance(guild, discord.Guild):
+            return
+        if not await self.config.guild(guild).enabled():
+            return
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return
+
+        cfg = await self.config.guild(guild).all()
+        templates = (cfg["default_message"], *cfg["channels"].values())
+        if not any(_uses_track(template) for template in templates):
+            return
+
+        for channel in guild.voice_channels:
+            template = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
+            if _uses_track(template):
+                self._queue_update(channel)
+
+    def _now_playing(self, guild: discord.Guild) -> Tuple[Any, Any]:
+        """Return ``(track, requester)`` for this guild's player.
+
+        Never raises.  Audio not loaded, node down, no player and an idle
+        player all mean the same thing to a status line - nothing is playing -
+        and an exception here would kill the listener that triggered it.
+        """
+        if lavalink is None:
+            return None, None
+        try:
+            player = lavalink.get_player(guild.id)
+        except Exception:  # NodeNotFound / PlayerNotFound / NodeNotReady
+            return None, None
+
+        track = getattr(player, "current", None)
+        if track is None:
+            return None, None
+
+        try:
+            requester = player.fetch("requester")
+        except Exception:
+            requester = None
+        return track, requester
+
+    def _render(
+        self,
+        template: str,
+        fallback: str,
+        count: int,
+        track=None,
+        requester=None,
+    ) -> str:
+        """Fill every placeholder and return the text to push, possibly empty."""
+        if track is None:
+            title, author, requester_name = fallback, "", ""
+        else:
+            title = getattr(track, "title", None) or "Unknown title"
+            author = getattr(track, "author", None) or ""
+            requester_name = getattr(requester, "display_name", None) or ""
+
+        return (
+            template.replace("{count}", str(count))
+            .replace("{track}", title)
+            .replace("{author}", author)
+            .replace("{requester}", requester_name)
+        ).strip()
 
     def _queue_update(self, channel: discord.VoiceChannel) -> None:
         """Debounce a status update for this channel.
@@ -379,13 +535,36 @@ class VCStatus(commands.Cog):
 
         # A per-channel override always beats the server-wide default.
         clear_empty = cfg["channel_empty"].get(str(channel.id), cfg["clear_when_empty"])
+        template = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
 
-        # ``status`` is nullable on this route: null clears the status.
-        if count == 0 and clear_empty:
+        # Only ask the player when the text actually shows the track: a plain
+        # "{count} connected" must not depend on the Audio cog at all.
+        track = requester = None
+        if _uses_track(template):
+            track, requester = self._now_playing(guild)
+
+        # ``status`` is nullable on this route: null clears the status.  An
+        # empty channel is only cleared while nothing is playing either,
+        # otherwise a channel the music bot sits in alone loses its
+        # now-playing line the moment everybody else leaves.  A track template
+        # with no fallback text clears too, so the decoration around the empty
+        # placeholder ("🎵 ") does not linger as if it were content.
+        clears_when_idle = (
+            _uses_track(template) and track is None and not cfg["track_fallback"].strip()
+        )
+        if (count == 0 and clear_empty and track is None) or clears_when_idle:
             resolved: Optional[str] = None
         else:
-            msg = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
-            resolved = msg.replace("{count}", str(count))
+            resolved = (
+                self._render(
+                    template, cfg["track_fallback"], count, track, requester
+                )
+                or None
+            )
+            # The configured text was length-checked on its own; the track is
+            # live input, so the *rendered* text is what has to fit.
+            if resolved is not None and len(resolved) > STATUS_LIMIT:
+                resolved = resolved[:STATUS_LIMIT]
 
         if not channel.permissions_for(guild.me).manage_channels:
             log.debug(
