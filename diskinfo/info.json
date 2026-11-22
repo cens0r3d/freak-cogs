@@ -1,0 +1,34 @@
+{
+    "name": "DiskInfo",
+    "author": [
+        "Hermes Agent"
+    ],
+    "description": "Free space on the server that hosts the bot: every real filesystem as an embed with a bar, used/free/total size and mountpoint, plus an optional PNG bar card. Pseudo filesystems, bind mounts, loop devices and tiny partitions are filtered out per guild.",
+    "disabled": false,
+    "end_user_data_statement": "This cog stores no user data. Per guild it keeps the list of hidden mountpoints and two display settings (size cut-off, chart on/off) in Red's Config.",
+    "hidden": false,
+    "install_msg": "Thanks for installing DiskInfo! `[p]df` shows the disk usage of the host, `[p]df chart` attaches the PNG card. The picture needs Pillow (`[p]pipinstall pillow`) and the **Attach Files** permission; the embed works without both.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        9,
+        0
+    ],
+    "permissions": [
+        "embed_links",
+        "attach_files"
+    ],
+    "required_cogs": {},
+    "requirements": [
+        "pillow>=10.0"
+    ],
+    "short": "Disk usage of the bot's host, as an embed with an optional chart",
+    "tags": [
+        "utility",
+        "server",
+        "monitoring",
+        "disk",
+        "system"
+    ],
+    "type": "COG"
+}
