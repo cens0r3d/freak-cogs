@@ -5,14 +5,19 @@ many people are in them. It updates whenever a member joins, leaves or moves
 between voice channels, so a channel can read `🎧 3 connected` without anyone
 touching Discord's UI.
 
-It can also show what the music bot is playing: `{track}`, `{author}` and
-`{requester}` are filled from Red's Audio cog the moment a track starts or ends,
-so a channel reads `🎵 Song — Artist` while something is playing and goes blank
-(or falls back to your own idle text) when the queue runs dry.
+Each channel has **two states, each with its own text**:
+
+- **Audio** — the music bot is playing *in that channel*: the audio text, filled
+  with the current title (`🎵 Song — Artist`).
+- **Default** — anything else: the normal `{count}` text (`🎧 3 connected`).
+
+The whole template is swapped between the two states, so nothing of the audio
+text can survive into the idle state. When the music stops, the channel simply
+shows its normal text again (or nothing, if you clear empty channels).
 
 ```
 [p]vcstatus default 🎧 {count} connected
-[p]vcstatus channel #musik 🎵 {track} — {author}
+[p]vcstatus audio 🎵 {track} — {author}
 [p]vcstatus toggle
 ```
 
@@ -33,58 +38,66 @@ Every command needs **Manage Channels** on the server.
 | Command | What it does |
 | --- | --- |
 | `[p]vcstatus toggle` | Enable or disable the automatic status. Enabling re-pushes every channel once |
-| `[p]vcstatus default <text>` | Status message for every voice channel that has no override |
+| `[p]vcstatus default <text>` | Status message for every voice channel that has no override — the idle text |
+| `[p]vcstatus audio <text>` | Status message shown while the music bot plays in that channel; without text the feature is switched off |
 | `[p]vcstatus channel <#voice> <text>` | Status message for one specific channel |
-| `[p]vcstatus fallback <text>` | What `{track}` shows while nothing is playing; without text it is cleared |
-| `[p]vcstatus remove [#voice]` | Drop one channel's override; without a channel it resets the default message, the empty-channel setting, the fallback and every override |
+| `[p]vcstatus remove [#voice]` | Drop one channel's override; without a channel it resets the default message, the audio text, the empty-channel setting and every override |
 | `[p]vcstatus empty [#voice] [on\|off\|reset]` | What an empty channel shows — server-wide (no channel) or per channel |
 | `[p]vcstatus resync` | Force a re-push to every voice channel — the first thing to try when a status looks stale |
 | `[p]vcstatus show` | Current configuration of this server, plus what is playing right now |
 
 ## Placeholders and limits
 
-| Placeholder | Replaced with |
-| --- | --- |
-| `{count}` | Number of **humans** in the channel; bots are not counted |
-| `{track}` | Title of the track the music bot is playing |
-| `{author}` | Artist / channel of that track |
-| `{requester}` | Whoever queued it |
+`{count}` works everywhere. The track placeholders only work in the **audio**
+text — `default` and `channel` refuse them with a pointer to `vcstatus audio`,
+because a half-filled track placeholder in the idle text is exactly what leaves
+a bare `🎵` behind.
+
+| Placeholder | Where | Replaced with |
+| --- | --- | --- |
+| `{count}` | everywhere | Number of **humans** in the channel; bots are not counted |
+| `{track}` | audio text | Title of the track the music bot is playing |
+| `{author}` | audio text | Artist / channel of that track |
+| `{requester}` | audio text | Whoever queued it |
 
 - A message is capped at **500 characters** — Discord's limit for the status
   field. Longer input is refused with the length it would have had.
 - The 500 limit applies to the **filled** text as well, because a track title is
   live input, not something you typed. An overlong title is cut off at 500.
-- Any text is allowed, including emoji and formatting characters.
-- Channels whose text has no track placeholder never touch the music bot and do
-  not update when the track changes.
+- With no audio text configured, nothing ever touches the music bot.
 
-## Now playing
+## How the two states are chosen
 
-The track comes from the Audio cog that is already running on the same bot — the
-cog asks Red's own player directly, so there is no second Lavalink connection,
-no extra request and no password to configure. Updates are driven by the
-`red_audio_track_start` / `_track_end` / `_queue_end` events and run through the
-same two-second debounce as joins and leaves, so a skip only costs one request
-per channel.
+```
+music bot playing in channel X  ->  channel X shows the audio text
+everything else                 ->  the channel's own text / the default text
+```
 
-**Nothing is playing** is the interesting case:
-
-- Without a fallback the whole status is **cleared**. That is deliberate: a text
-  like `🎵 {track}` would otherwise leave a bare `🎵` behind as if it were
-  content. Set a fallback if you want something to stay.
-- With a fallback the placeholder is replaced by it, e.g.
-  `[p]vcstatus fallback nichts läuft` turns `🎵 {track}` into `🎵 nichts läuft`.
-- A channel the music bot sits in **alone** keeps its now-playing line even with
-  empty-channel clearing on — otherwise the title would vanish as soon as the
+- Only the channel the bot is actually sitting in switches to the audio text.
+  Other channels keep their normal text, even while music plays.
+- A player that is loaded but paused still counts as playing — Red sends no
+  event for pause/resume, so the status would otherwise be stuck either way.
+- The bot sitting **alone** in its channel keeps the audio text even with
+  empty-channel clearing on; otherwise the title would vanish the moment the
   last listener left.
 - No Audio cog, a dead Lavalink node or a disconnected player all count as
   "nothing playing"; none of them raise or spill into the log.
+
+## Where the track comes from
+
+Red's Audio cog already runs on this bot, so VCStatus asks Red's own player
+(`lavalink.get_player(guild_id)`) instead of opening a second Lavalink
+connection — no password, no extra request. Updates are driven by the
+`red_audio_track_start` / `_track_end` / `_queue_end` / `_audio_disconnect`
+events and run through the same two-second debounce as joins and leaves, so a
+skip costs at most one request per channel.
 
 ## Empty channels
 
 By default an empty channel keeps showing the message with a count of 0. With
 the empty behaviour switched on, the status is **cleared** instead, so an empty
-channel carries no text at all.
+channel carries no text at all. The audio state is exempt while a track is
+loaded, see above.
 
 - `[p]vcstatus empty` toggles the server-wide default.
 - `[p]vcstatus empty #lounge` toggles that channel's own setting.
