@@ -23,6 +23,7 @@ Facts this cog is built around:
 import asyncio
 import io
 import logging
+import re
 from typing import Any, Dict, Optional, Tuple
 
 import discord
@@ -51,6 +52,10 @@ STATUS_LIMIT = 500
 # `default` and `channel` on purpose: mixing them into the idle text is what
 # leaves a bare "🎵 " behind once the music stops.
 TRACK_PLACEHOLDERS = ("{track}", "{author}", "{requester}")
+
+# Only an explicit mention (or a raw ID) can pick a channel: a plain word at the
+# start of the text must never be eaten as a channel name.
+_CHANNEL_REF = re.compile(r"^<#(\d+)>$")
 
 # Distinguishes "we never set anything here" from "we set it to nothing".
 UNKNOWN = object()
@@ -88,6 +93,7 @@ class VCStatus(commands.Cog):
             default_message="{count} connected",
             clear_when_empty=False,
             audio_message="",
+            channel_audio={},
             channels={},
             channel_empty={},
         )
@@ -227,18 +233,26 @@ class VCStatus(commands.Cog):
         await ctx.send("Re-pushed the status to every voice channel.")
 
     @vcstatus.command(name="default")
-    async def set_default(self, ctx: commands.Context, *, message: str) -> None:
-        """Set the status shown while no music plays in a channel.
+    async def set_default(self, ctx: commands.Context, *, message: str = "") -> None:
+        """Set the status shown while no music plays.
 
-        Only ``{count}`` works here; the track placeholders belong to
-        ``[p]vcstatus audio``.  Maximum **500 characters**.
+        Without a channel the text is the server default; with a leading
+        channel mention it overrides just that channel. No text after a channel
+        mention drops the override. Only ``{count}`` works here - the track
+        placeholders belong to ``[p]vcstatus audio``. Maximum **500 chars**.
 
-        Example: ``[p]vcstatus default 🎧 {count} connected``
+        **Examples**
+
+        * ``[p]vcstatus default 🎧 {count} connected`` — server default
+        * ``[p]vcstatus default #lounge 🎧 {count} here`` — this channel only
+        * ``[p]vcstatus default #lounge`` — drop the channel's override
         """
+        channel, message = self._split_channel(ctx, message)
+
         if _uses_track(message):
             await ctx.send(
                 "Track placeholders belong in the audio status: "
-                f"`{ctx.clean_prefix}vcstatus audio 🎵 {{track}} — {{author}}`"
+                f"`{ctx.clean_prefix}vcstatus audio [channel] 🎵 {{track}} — {{author}}`"
             )
             return
 
@@ -246,35 +260,70 @@ class VCStatus(commands.Cog):
             await ctx.send(f"Message too long ({len(message)}/{STATUS_LIMIT}).")
             return
 
-        await self.config.guild(ctx.guild).default_message.set(message)
-        await ctx.send(f"Default status message set to:\n{inline(message)}")
+        if channel is not None:
+            async with self.config.guild(ctx.guild).channels() as overrides:
+                if message:
+                    overrides[str(channel.id)] = message
+                else:
+                    overrides.pop(str(channel.id), None)
+            if message:
+                await ctx.send(f"Status for {channel.mention} set to:\n{inline(message)}")
+            else:
+                await ctx.send(f"{channel.mention} follows the server default again.")
+        else:
+            if not message:
+                await ctx.send(
+                    "Give me a text, or name a channel to reset: "
+                    f"`{ctx.clean_prefix}vcstatus default #channel`"
+                )
+                return
+            await self.config.guild(ctx.guild).default_message.set(message)
+            await ctx.send(f"Default status message set to:\n{inline(message)}")
 
         if await self.config.guild(ctx.guild).enabled():
             await self._apply_status_to_all(ctx.guild, force=True)
 
     @vcstatus.command(name="audio")
     async def set_audio(self, ctx: commands.Context, *, message: str = "") -> None:
-        """Set the status shown while the music bot plays in that channel.
+        """Set the status shown while the music bot plays.
 
-        This template replaces the default text completely for as long as a
-        track is loaded in the channel the bot is sitting in - there is nothing
-        left to carry over once the music stops.  Placeholders: ``{track}``,
-        ``{author}``, ``{requester}`` and ``{count}``.  Without a text the audio
-        status is switched off again.
+        Without a channel the text applies to every channel; with a leading
+        channel mention it overrides just that one. This template replaces the
+        normal text completely while a track is loaded in the bot's channel, so
+        nothing carries over once the music stops. Placeholders: ``{track}``,
+        ``{author}``, ``{requester}``, ``{count}``. No text switches it off (or,
+        after a channel mention, drops that channel's override).
 
         Maximum **500 characters**; a long title is cut off at Discord's limit.
 
-        Example: ``[p]vcstatus audio 🎵 {track} — {author}``
+        **Examples**
+
+        * ``[p]vcstatus audio 🎵 {track} — {author}`` — every channel
+        * ``[p]vcstatus audio #musik 🎵 {track}`` — this channel only
+        * ``[p]vcstatus audio`` — switch it off
         """
+        channel, message = self._split_channel(ctx, message)
+
         if len(message) > STATUS_LIMIT:
             await ctx.send(f"Message too long ({len(message)}/{STATUS_LIMIT}).")
             return
 
-        await self.config.guild(ctx.guild).audio_message.set(message)
-        if message:
-            await ctx.send(f"Audio status set to:\n{inline(message)}")
+        if channel is not None:
+            async with self.config.guild(ctx.guild).channel_audio() as overrides:
+                if message:
+                    overrides[str(channel.id)] = message
+                else:
+                    overrides.pop(str(channel.id), None)
+            if message:
+                await ctx.send(f"Audio status for {channel.mention} set to:\n{inline(message)}")
+            else:
+                await ctx.send(f"{channel.mention} uses the server-wide audio text again.")
         else:
-            await ctx.send("Audio status disabled; channels show the default text again.")
+            await self.config.guild(ctx.guild).audio_message.set(message)
+            if message:
+                await ctx.send(f"Audio status set to:\n{inline(message)}")
+            else:
+                await ctx.send("Audio status disabled; channels show their normal text again.")
 
         if await self.config.guild(ctx.guild).enabled():
             await self._apply_status_to_all(ctx.guild, force=True)
@@ -289,8 +338,9 @@ class VCStatus(commands.Cog):
     ) -> None:
         """Set a custom status message for a specific voice channel.
 
-        Only ``{count}`` works here; the track placeholders belong to
-        ``[p]vcstatus audio``.  Maximum **500 characters**.
+        Shortcut for ``[p]vcstatus default <channel> <text>``.  Only ``{count}``
+        works here; the track placeholders belong to ``[p]vcstatus audio``.
+        Maximum **500 characters**.
 
         Example: ``[p]vcstatus channel #general 🎮 {count} playing``
         """
@@ -323,21 +373,41 @@ class VCStatus(commands.Cog):
         ctx: commands.Context,
         channel: Optional[discord.VoiceChannel] = None,
     ) -> None:
-        """Remove a per-channel message override, or reset everything."""
+        """Remove a channel's overrides, or reset everything.
+
+        Without a channel every setting goes back to its default.
+        """
         if channel is not None:
+            key = str(channel.id)
+            removed = []
+
             async with self.config.guild(ctx.guild).channels() as channels:
-                key = str(channel.id)
-                if key in channels:
-                    del channels[key]
-                    self._status_cache.pop(channel.id, None)
-                    await ctx.send(f"Removed override for {channel.mention}.")
-                else:
-                    await ctx.send(f"No override for {channel.mention}.")
+                if channels.pop(key, None) is not None:
+                    removed.append("status text")
+
+            async with self.config.guild(ctx.guild).channel_audio() as audio:
+                if audio.pop(key, None) is not None:
+                    removed.append("audio text")
+
+            async with self.config.guild(ctx.guild).channel_empty() as empty:
+                if empty.pop(key, None) is not None:
+                    removed.append("empty-channel setting")
+
+            self._status_cache.pop(channel.id, None)
+            if removed:
+                await ctx.send(
+                    f"Removed the {', '.join(removed)} of {channel.mention}."
+                )
+                if await self.config.guild(ctx.guild).enabled():
+                    await self._update_status(channel)
+            else:
+                await ctx.send(f"{channel.mention} has no overrides.")
         else:
             await self.config.guild(ctx.guild).default_message.set("{count} connected")
             await self.config.guild(ctx.guild).clear_when_empty.set(False)
             await self.config.guild(ctx.guild).audio_message.set("")
             await self.config.guild(ctx.guild).channels.set({})
+            await self.config.guild(ctx.guild).channel_audio.set({})
             await self.config.guild(ctx.guild).channel_empty.set({})
             self._status_cache.clear()
             await ctx.send("All status settings reset to defaults.")
@@ -364,6 +434,10 @@ class VCStatus(commands.Cog):
         overrides = [
             f"  - {label(ch_id)} -> {inline(msg)}"
             for ch_id, msg in cfg["channels"].items()
+        ]
+        overrides += [
+            f"  - {label(ch_id)} -> audio: {inline(msg)}"
+            for ch_id, msg in cfg["channel_audio"].items()
         ]
         overrides += [
             f"  - {label(ch_id)} -> empty channels: "
@@ -451,6 +525,31 @@ class VCStatus(commands.Cog):
     # Helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _split_channel(
+        ctx: commands.Context, text: str
+    ) -> Tuple[Optional[discord.VoiceChannel], str]:
+        """Split a leading ``#channel`` / channel ID off a greedy argument.
+
+        Both commands accept "text" and "channel + text" in one argument, which
+        only works with a greedy string.  A bare word must never be resolved as
+        a channel name here - that would silently swallow the first word of the
+        status text - so only a real mention or a raw ID counts.
+        """
+        first, _, rest = text.strip().partition(" ")
+        match = _CHANNEL_REF.match(first)
+        if match is not None:
+            channel_id = int(match.group(1))
+        elif first.isdigit():
+            channel_id = int(first)
+        else:
+            return None, text.strip()
+
+        channel = ctx.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            return None, text.strip()
+        return channel, rest.strip()
+
     async def _refresh_audio(self, guild: Optional[discord.Guild]) -> None:
         """Queue a re-render after the music bot changed its track.
 
@@ -467,7 +566,8 @@ class VCStatus(commands.Cog):
             return
         if await self.bot.cog_disabled_in_guild(self, guild):
             return
-        if not await self.config.guild(guild).audio_message():
+        cfg = await self.config.guild(guild).all()
+        if not (cfg["audio_message"] or cfg["channel_audio"]):
             return
 
         for channel in guild.voice_channels:
@@ -570,12 +670,13 @@ class VCStatus(commands.Cog):
         # text.  Because the whole template is swapped, no half-filled "🎵 "
         # can survive into the idle state.
         template = cfg["channels"].get(str(channel.id)) or cfg["default_message"]
+        audio_template = cfg["channel_audio"].get(str(channel.id)) or cfg["audio_message"]
         track = requester = None
         playing_here = False
-        if cfg["audio_message"]:
+        if audio_template:
             playing_id, track, requester = self._now_playing(guild)
             if track is not None and playing_id == channel.id:
-                template = cfg["audio_message"]
+                template = audio_template
                 playing_here = True
             else:
                 track = requester = None

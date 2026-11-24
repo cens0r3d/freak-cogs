@@ -38,13 +38,33 @@ Every command needs **Manage Channels** on the server.
 | Command | What it does |
 | --- | --- |
 | `[p]vcstatus toggle` | Enable or disable the automatic status. Enabling re-pushes every channel once |
-| `[p]vcstatus default <text>` | Status message for every voice channel that has no override — the idle text |
-| `[p]vcstatus audio <text>` | Status message shown while the music bot plays in that channel; without text the feature is switched off |
-| `[p]vcstatus channel <#voice> <text>` | Status message for one specific channel |
-| `[p]vcstatus remove [#voice]` | Drop one channel's override; without a channel it resets the default message, the audio text, the empty-channel setting and every override |
+| `[p]vcstatus default [<#voice>] <text>` | Status message shown while no music plays — server-wide, or for one channel when it starts with a channel mention |
+| `[p]vcstatus audio [<#voice>] <text>` | Status message shown while the music bot plays — server-wide, or for one channel; without text it is switched off |
+| `[p]vcstatus channel <#voice> <text>` | Shortcut for `default <#voice> <text>` |
+| `[p]vcstatus remove [<#voice>]` | Drop one channel's status/audio/empty overrides; without a channel it resets everything to defaults |
 | `[p]vcstatus empty [#voice] [on\|off\|reset]` | What an empty channel shows — server-wide (no channel) or per channel |
 | `[p]vcstatus resync` | Force a re-push to every voice channel — the first thing to try when a status looks stale |
 | `[p]vcstatus show` | Current configuration of this server, plus what is playing right now |
+
+## Per channel
+
+`default` and `audio` both take an optional channel right after the command
+name — a real channel mention (`#musik`) or its ID. A bare word is always part
+of the text, never a channel name, so nothing gets swallowed:
+
+```
+[p]vcstatus default 🎧 {count} connected              # server default
+[p]vcstatus default #lounge 🎧 {count} here           # this channel only
+[p]vcstatus default #lounge                           # drop the override
+
+[p]vcstatus audio 🎵 {track} — {author}               # server-wide audio text
+[p]vcstatus audio #musik 🎵 {track}                   # this channel only
+[p]vcstatus audio #musik                              # back to the server text
+```
+
+Precedence, once the bot is playing in a channel: that channel's audio text →
+server-wide audio text → (no audio text configured: the channel keeps its
+normal text and the audio feature stays off).
 
 ## Placeholders and limits
 
