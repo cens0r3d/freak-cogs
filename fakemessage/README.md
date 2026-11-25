@@ -5,28 +5,34 @@ WhatsApp, Telegram, X, Twitch chat or Kick chat. Real avatar, real role colour,
 the platform's own bubble and its own markdown.
 
 ```
-/fakemessage member:@someone message:i never said that
-/fakewhatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
-/faketweet message:https://nwo.monster ist down name:Drangsal handle:drangsalinator
-[p]fakemessage @someone i never said that
+/fakemessage service:whatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
+/fakemessage service:x message:https://nwo.monster ist down name:Drangsal handle:drangsalinator
+[p]fakemessage whatsapp *nein* hab ich nicht geschrieben
+[p]fakemessage discord @someone i never said that
 ```
 
 ## Commands
 
-| Slash | Prefix | Renders |
-| --- | --- | --- |
-| `/fakemessage` | `[p]fakemessage` (`fakemsg`) | Discord message: role colour, BOT tag, mentions, spoilers, `code`. |
-| `/fakewhatsapp` | `[p]fakewa` | WhatsApp chat: header, TODAY chip, bubble, time, blue ticks when outgoing. |
-| `/faketelegram` | `[p]faketg` | Telegram chat: header, bubble, time and check marks. |
-| `/faketweet` | `[p]faketweet` (`faketw`) | X post: name, handle, blue check, meta line, engagement row. |
-| `/faketwitch` | `[p]faketwitch` | Twitch chat line(s): badge, coloured name, message. |
-| `/fakekick` | `[p]fakekick` | Kick chat line(s): badge, brand-green name, message. |
+| Command | What it does |
+| --- | --- |
+| `/fakemessage service message [member] [name] [timestamp] [outgoing] [handle] [verified] [colour] [badge]` | Renders one card and posts it as `message.png`. |
+| `[p]fakemessage <service> [member] <text>` (alias `fake`) | Same card, from you; `discord` wants a member after the service. |
 
-Every command takes `message`, plus `member` (whose avatar and name) and `name`
-to override. The chat commands add `time`; WhatsApp and Telegram also take
-`outgoing`. The post adds `handle`, `verified`, `time`, `date` and the four
-counts. Twitch and Kick take `colour` (#rrggbb) and `badge`
-(none/mod/sub/vip/founder), and every line break becomes another chat line.
+Five pictures per minute per user, 2000 characters per message.
+
+## Services
+
+| `service` | Looks like | Extra options |
+| --- | --- | --- |
+| `discord` | Message row: role colour, BOT tag, mentions, spoilers, `code`. | `member` (required), `timestamp` |
+| `whatsapp` | Chat header, TODAY chip, bubble, time, blue ticks. | `member`, `name`, `timestamp`, `outgoing` |
+| `telegram` | Chat header, bubble, time, check marks. | `member`, `name`, `timestamp`, `outgoing` |
+| `x` | Post: handle, blue check, meta line, engagement row. | `member`, `name`, `handle`, `verified`, `timestamp` |
+| `twitch` | Chat line(s) with badge and coloured name. | `member`, `name`, `colour`, `badge` |
+| `kick` | Chat line(s) with badge, brand-green name. | `member`, `name`, `colour`, `badge` |
+
+`colour` is `#rrggbb`, `badge` is none/mod/sub/vip/founder, and every line break
+becomes another chat line on Twitch and Kick.
 
 ## Markdown, per platform
 
@@ -48,7 +54,7 @@ requests and an offline bot still draws what it has seen.
 
 | Symptom | Cause |
 | --- | --- |
-| The slash commands do not appear | Red parks new slash commands disabled: `[p]slash enablecog fakemessage`, then `[p]slash sync`. |
+| The slash command does not appear | Red parks new slash commands disabled: `[p]slash enablecog fakemessage`, then `[p]slash sync`. |
 | "I could not draw that" | Pillow missing in the bot venv, or the log has the traceback: `[p]pipinstall pillow`. |
 | Nothing is sent at all | The bot lacks Attach Files in that channel; `embed_links` is not enough. |
 | Emoji show as plain symbols | The Twemoji/CDN request failed (no outbound network); cached emoji still render. |
@@ -58,4 +64,4 @@ requests and an offline bot still draws what it has seen.
 ## Ideas for later
 
 Instagram DM, iMessage, Reddit comment, YouTube live chat, Steam chat - each is
-one renderer in `cards.py` plus one thin command.
+one renderer in `cards.py` plus one `service` entry.

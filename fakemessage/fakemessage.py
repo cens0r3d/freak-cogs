@@ -33,6 +33,20 @@ log = logging.getLogger("red.freak_cogs.fakemessage")
 MAX_CHARS = 2000
 AVATAR_TIMEOUT = aiohttp.ClientTimeout(total=10)
 BADGES = {"none": (), "mod": ("mod",), "sub": ("sub",), "vip": ("vip",), "founder": ("founder",)}
+SERVICES = {
+    "discord": "discord",
+    "dc": "discord",
+    "whatsapp": "whatsapp",
+    "wa": "whatsapp",
+    "telegram": "telegram",
+    "tg": "telegram",
+    "x": "x",
+    "twitter": "x",
+    "tweet": "x",
+    "tw": "x",
+    "twitch": "twitch",
+    "kick": "kick",
+}
 
 
 class FakeMessage(commands.Cog):
@@ -174,6 +188,8 @@ class FakeMessage(commands.Cog):
         await self._reply(interaction, data)
 
     # WhatsApp
+
+    # -- per-service transport ------------------------------------------
     async def _whatsapp(
         self,
         member: Optional[discord.Member],
@@ -191,45 +207,6 @@ class FakeMessage(commands.Cog):
             outgoing=outgoing,
         )
 
-    @app_commands.command(name="fakewhatsapp", description="Create a fake WhatsApp chat image.")
-    @app_commands.describe(
-        message="What the message says - WhatsApp markdown (*bold*, _italic_, ~strike~) works",
-        member="Whose name and avatar appear in the header",
-        name="Show a different name than the member's",
-        time="Timestamp inside the bubble, e.g. 21:07",
-        outgoing="Green bubble on the right, with read ticks",
-    )
-    async def fakewhatsapp_slash(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        member: Optional[discord.Member] = None,
-        name: Optional[str] = None,
-        time: Optional[str] = None,
-        outgoing: bool = False,
-    ) -> None:
-        await self._slash_card(
-            interaction,
-            self._whatsapp,
-            message=message,
-            member=member,
-            name=name,
-            time=time,
-            outgoing=outgoing,
-        )
-
-    @commands.command(name="fakewa", aliases=["fakewhatsapp"])
-    @commands.guild_only()
-    @checks.bot_has_permissions(attach_files=True)
-    @commands.cooldown(5, 60, commands.BucketType.user)
-    async def fakewa(self, ctx: commands.Context, *, message: str):
-        """Fake a WhatsApp message from you.
-
-        The slash command takes a member, name, time and an outgoing flag.
-        """
-        await self._deliver_card(ctx, self._whatsapp, message)
-
-    # Telegram
     async def _telegram(
         self,
         member: Optional[discord.Member],
@@ -247,42 +224,6 @@ class FakeMessage(commands.Cog):
             outgoing=outgoing,
         )
 
-    @app_commands.command(name="faketelegram", description="Create a fake Telegram chat image.")
-    @app_commands.describe(
-        message="What the message says - Telegram markdown (**bold**, __italic__, ~~strike~~) works",
-        member="Whose name and avatar appear in the header",
-        name="Show a different name than the member's",
-        time="Timestamp inside the bubble, e.g. 21:07",
-        outgoing="Blue bubble on the right, with check marks",
-    )
-    async def faketelegram_slash(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        member: Optional[discord.Member] = None,
-        name: Optional[str] = None,
-        time: Optional[str] = None,
-        outgoing: bool = False,
-    ) -> None:
-        await self._slash_card(
-            interaction,
-            self._telegram,
-            message=message,
-            member=member,
-            name=name,
-            time=time,
-            outgoing=outgoing,
-        )
-
-    @commands.command(name="faketg", aliases=["faketelegram"])
-    @commands.guild_only()
-    @checks.bot_has_permissions(attach_files=True)
-    @commands.cooldown(5, 60, commands.BucketType.user)
-    async def faketg(self, ctx: commands.Context, *, message: str):
-        """Fake a Telegram message from you."""
-        await self._deliver_card(ctx, self._telegram, message)
-
-    # X / Twitter
     async def _tweet(
         self,
         member: Optional[discord.Member],
@@ -291,79 +232,19 @@ class FakeMessage(commands.Cog):
         handle: Optional[str] = None,
         verified: bool = False,
         time: Optional[str] = None,
-        date: Optional[str] = None,
-        replies: Optional[str] = None,
-        retweets: Optional[str] = None,
-        likes: Optional[str] = None,
-        views: Optional[str] = None,
     ) -> bytes:
         shown = (name or (member.display_name if member else "")).strip() or "someone"
         nick = (handle or (member.name if member else shown)).strip().lstrip("@")
-        kwargs: Dict[str, Any] = {
-            "handle": nick,
-            "verified": verified,
-            "time": self._stamp(time),
-            "date": (date or "").strip(),
-        }
-        for key, value in (("replies", replies), ("retweets", retweets), ("likes", likes), ("views", views)):
-            if value:
-                kwargs[key] = value.strip()
-        return await self._card(cards.tweet, member=member, name=shown, message=message, **kwargs)
-
-    @app_commands.command(name="faketweet", description="Create a fake X post image.")
-    @app_commands.describe(
-        message="The post text - links are coloured, text is not markdown",
-        member="Whose avatar to use",
-        name="Display name on the post",
-        handle="Handle without the @",
-        verified="Show the blue check",
-        time="Time on the post, e.g. 9:41 PM",
-        date="Date on the post, e.g. 25. Nov. 2026",
-        replies="Reply count",
-        retweets="Repost count",
-        likes="Like count",
-        views="View count",
-    )
-    async def faketweet_slash(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        member: Optional[discord.Member] = None,
-        name: Optional[str] = None,
-        handle: Optional[str] = None,
-        verified: bool = False,
-        time: Optional[str] = None,
-        date: Optional[str] = None,
-        replies: Optional[str] = None,
-        retweets: Optional[str] = None,
-        likes: Optional[str] = None,
-        views: Optional[str] = None,
-    ) -> None:
-        await self._slash_card(
-            interaction,
-            self._tweet,
-            message=message,
+        return await self._card(
+            cards.tweet,
             member=member,
-            name=name,
-            handle=handle,
+            name=shown,
+            message=message,
+            handle=nick,
             verified=verified,
-            time=time,
-            date=date,
-            replies=replies,
-            retweets=retweets,
-            likes=likes,
-            views=views,
+            time=self._stamp(time),
         )
 
-    @commands.command(name="faketweet", aliases=["faketw"])
-    @commands.guild_only()
-    @checks.bot_has_permissions(attach_files=True)
-    @commands.cooldown(5, 60, commands.BucketType.user)
-    async def faketweet(self, ctx: commands.Context, *, message: str):
-        """Fake an X post from you."""
-        await self._deliver_card(ctx, self._tweet, message)
-
-    # Twitch / Kick
     @staticmethod
     def _colour(value: Optional[str]) -> Optional[Tuple[int, int, int]]:
         raw = (value or "").strip().lstrip("#")
@@ -379,7 +260,7 @@ class FakeMessage(commands.Cog):
         member: Optional[discord.Member],
         name: Optional[str],
         message: str,
-        platform: str,
+        platform: str = "twitch",
         colour: Optional[str] = None,
         badge: Optional[str] = None,
     ) -> bytes:
@@ -393,97 +274,41 @@ class FakeMessage(commands.Cog):
             badges=BADGES.get((badge or "none").lower(), ()),
         )
 
-    @app_commands.command(name="faketwitch", description="Create a fake Twitch chat snippet.")
-    @app_commands.describe(
-        message="One chat line per line break (max 6)",
-        member="Whose name and avatar to use",
-        name="Username in the chat line",
-        colour="Username colour as #rrggbb",
-        badge="Badge in front of the name",
-    )
-    @app_commands.choices(
-        badge=[
-            app_commands.Choice(name="none", value="none"),
-            app_commands.Choice(name="mod", value="mod"),
-            app_commands.Choice(name="sub", value="sub"),
-            app_commands.Choice(name="vip", value="vip"),
-            app_commands.Choice(name="founder", value="founder"),
-        ]
-    )
-    async def faketwitch_slash(
+    async def _dispatch(
         self,
-        interaction: discord.Interaction,
-        message: str,
         member: Optional[discord.Member] = None,
         name: Optional[str] = None,
+        message: str = "",
+        *,
+        service: str = "discord",
+        timestamp: Optional[str] = None,
+        outgoing: bool = False,
+        handle: Optional[str] = None,
+        verified: bool = False,
         colour: Optional[str] = None,
-        badge: Optional[app_commands.Choice[str]] = None,
-    ) -> None:
-        await self._slash_card(
-            interaction,
-            self._chat,
-            message=message,
-            member=member,
-            name=name,
-            platform="twitch",
-            colour=colour,
-            badge=badge.value if badge else None,
+        badge: Optional[str] = None,
+    ) -> bytes:
+        """One entry point: pick the renderer from the service name."""
+        if service == "discord":
+            if member is None:
+                raise ValueError("the discord card needs a member")
+            return await self._build(member, message, name=name, timestamp=timestamp)
+        if service == "whatsapp":
+            return await self._whatsapp(member, name, message, time=timestamp, outgoing=outgoing)
+        if service == "telegram":
+            return await self._telegram(member, name, message, time=timestamp, outgoing=outgoing)
+        if service == "x":
+            return await self._tweet(
+                member, name, message, handle=handle, verified=verified, time=timestamp
+            )
+        return await self._chat(
+            member, name, message, platform=service, colour=colour, badge=badge
         )
 
-    @commands.command(name="faketwitch")
-    @commands.guild_only()
-    @checks.bot_has_permissions(attach_files=True)
-    @commands.cooldown(5, 60, commands.BucketType.user)
-    async def faketwitch(self, ctx: commands.Context, *, message: str):
-        """Fake a Twitch chat line from you."""
-        await self._deliver_card(ctx, self._chat, message, platform="twitch")
-
-    @app_commands.command(name="fakekick", description="Create a fake Kick chat snippet.")
-    @app_commands.describe(
-        message="One chat line per line break (max 6)",
-        member="Whose name and avatar to use",
-        name="Username in the chat line",
-        colour="Username colour as #rrggbb",
-        badge="Badge in front of the name",
-    )
-    @app_commands.choices(
-        badge=[
-            app_commands.Choice(name="none", value="none"),
-            app_commands.Choice(name="mod", value="mod"),
-            app_commands.Choice(name="sub", value="sub"),
-            app_commands.Choice(name="vip", value="vip"),
-            app_commands.Choice(name="founder", value="founder"),
-        ]
-    )
-    async def fakekick_slash(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        member: Optional[discord.Member] = None,
-        name: Optional[str] = None,
-        colour: Optional[str] = None,
-        badge: Optional[app_commands.Choice[str]] = None,
+    # -- commands --------------------------------------------------------
+    async def _deliver_card(
+        self, ctx: commands.Context, builder, message: str, member=None, **kwargs
     ) -> None:
-        await self._slash_card(
-            interaction,
-            self._chat,
-            message=message,
-            member=member,
-            name=name,
-            platform="kick",
-            colour=colour,
-            badge=badge.value if badge else None,
-        )
-
-    @commands.command(name="fakekick")
-    @commands.guild_only()
-    @checks.bot_has_permissions(attach_files=True)
-    @commands.cooldown(5, 60, commands.BucketType.user)
-    async def fakekick(self, ctx: commands.Context, *, message: str):
-        """Fake a Kick chat line from you."""
-        await self._deliver_card(ctx, self._chat, message, platform="kick")
-
-    async def _deliver_card(self, ctx: commands.Context, builder, message: str, **kwargs) -> None:
         if not message.strip():
             await ctx.send("There is no message to draw.")
             return
@@ -496,80 +321,116 @@ class FakeMessage(commands.Cog):
             return
         async with ctx.typing():
             try:
-                data = await builder(ctx.author, None, message, **kwargs)
+                data = await builder(member or ctx.author, None, message, **kwargs)
             except Exception:
-                log.exception("fakemessage card render failed")
+                log.exception("fakemessage render failed")
                 await ctx.send("I could not draw that - check the bot log.")
                 return
         await ctx.send(file=discord.File(io.BytesIO(data), filename="message.png"))
 
-    async def _deliver(self, ctx: commands.Context, member: discord.Member, message: str) -> None:
-        if not message.strip():
-            await ctx.send("There is no message to draw.")
-            return
-        if len(message) > MAX_CHARS:
-            await ctx.send(
-                "That message is {} characters long - {} is the limit.".format(
-                    len(message), MAX_CHARS
-                )
-            )
-            return
-        async with ctx.typing():
-            try:
-                data = await self._build(member, message)
-            except Exception:
-                log.exception("fakemessage render failed")
-                await ctx.send("I could not draw that message - check the bot log.")
-                return
-        await ctx.send(file=discord.File(io.BytesIO(data), filename="message.png"))
-
-    # -- commands --------------------------------------------------------
-    @commands.command(name="fakemessage", aliases=["fakemsg"])
+    @commands.command(name="fakemessage", aliases=["fake"])
     @commands.guild_only()
     @checks.bot_has_permissions(attach_files=True)
     @commands.cooldown(5, 60, commands.BucketType.user)
-    async def fakemessage(self, ctx: commands.Context, member: discord.Member, *, message: str):
-        """Render a message from a member as a Discord screenshot.
+    async def fakemessage(
+        self, ctx: commands.Context, service: Optional[str] = None, *, rest: Optional[str] = None
+    ):
+        """Fake a screenshot of a chat or post, from you.
 
-        Example: `[p]fakemessage @someone i never said that`.
-        The slash command takes the same thing plus optional overrides.
+        `[p]fakemessage <service> <text>` - services: discord, whatsapp,
+        telegram, x, twitch, kick.
+        `[p]fakemessage discord @member <text>` - the Discord card needs a
+        member; the other services use you, with `member` and `name` overrides
+        on the slash command.
         """
-        await self._deliver(ctx, member, message)
+        if not service:
+            await ctx.send_help(ctx.command)
+            return
+        key = SERVICES.get(service.lower().strip("<>@!&"))
+        if key is None:
+            await ctx.send(
+                "I do not know `{}` - pick one of: {}.".format(
+                    service, ", ".join(sorted(set(SERVICES.values())))
+                )
+            )
+            return
+        text = (rest or "").strip()
+        member = ctx.author
+        if key == "discord":
+            first, _, remainder = text.partition(" ")
+            try:
+                member = await commands.MemberConverter().convert(ctx, first)
+            except commands.BadArgument:
+                await ctx.send(
+                    "For the Discord card I need a member: `{}fakemessage discord @someone <text>`.".format(
+                        ctx.clean_prefix
+                    )
+                )
+                return
+            text = remainder.strip()
+        await self._deliver_card(ctx, self._dispatch, text, member=member, service=key)
 
-    @app_commands.command(name="fakemessage", description="Create a fake Discord message image.")
+    @app_commands.command(name="fakemessage", description="Create a fake chat or post screenshot.")
     @app_commands.describe(
-        member="Who the message appears to be from",
-        message="What the message says - markdown, mentions and emoji work",
-        name="Show a different username than the member's",
-        timestamp="Replace the time, e.g. 'Yesterday at 23:12'",
-        bot_tag="Show the BOT tag next to the name",
+        service="Which app the screenshot should look like",
+        message="What the message says - line breaks become chat lines on Twitch and Kick",
+        member="Whose avatar and name appear (required for the discord card)",
+        name="Show a different name than the member's",
+        timestamp="Time in the bubble, next to the name, or instead of 'Today at ...'",
+        outgoing="WhatsApp/Telegram: green or blue bubble on the right, with ticks",
+        handle="X: handle without the @",
+        verified="X: show the blue check",
+        colour="Twitch/Kick: username colour as #rrggbb",
+        badge="Twitch/Kick: badge in front of the name",
+    )
+    @app_commands.choices(
+        service=[
+            app_commands.Choice(name="discord", value="discord"),
+            app_commands.Choice(name="whatsapp", value="whatsapp"),
+            app_commands.Choice(name="telegram", value="telegram"),
+            app_commands.Choice(name="x", value="x"),
+            app_commands.Choice(name="twitch", value="twitch"),
+            app_commands.Choice(name="kick", value="kick"),
+        ],
+        badge=[
+            app_commands.Choice(name="none", value="none"),
+            app_commands.Choice(name="mod", value="mod"),
+            app_commands.Choice(name="sub", value="sub"),
+            app_commands.Choice(name="vip", value="vip"),
+            app_commands.Choice(name="founder", value="founder"),
+        ],
     )
     async def fakemessage_slash(
         self,
         interaction: discord.Interaction,
-        member: discord.Member,
+        service: app_commands.Choice[str],
         message: str,
+        member: Optional[discord.Member] = None,
         name: Optional[str] = None,
         timestamp: Optional[str] = None,
-        bot_tag: bool = False,
+        outgoing: bool = False,
+        handle: Optional[str] = None,
+        verified: bool = False,
+        colour: Optional[str] = None,
+        badge: Optional[app_commands.Choice[str]] = None,
     ) -> None:
-        await interaction.response.defer(thinking=True)
-        if not message.strip() or len(message) > MAX_CHARS:
-            await interaction.followup.send(
-                "The message has to be between 1 and {} characters.".format(MAX_CHARS),
+        if service.value == "discord" and member is None:
+            await interaction.response.send_message(
+                "The discord card needs a member to copy the name and avatar from.",
                 ephemeral=True,
             )
             return
-        try:
-            data = await self._build(
-                member, message, name=name, timestamp=timestamp, bot=bot_tag
-            )
-        except Exception:
-            log.exception("fakemessage render failed")
-            await interaction.followup.send(
-                "I could not draw that message - check the bot log.", ephemeral=True
-            )
-            return
-        await interaction.followup.send(
-            file=discord.File(io.BytesIO(data), filename="message.png")
+        await self._slash_card(
+            interaction,
+            self._dispatch,
+            message=message,
+            service=service.value,
+            member=member,
+            name=name,
+            timestamp=timestamp,
+            outgoing=outgoing,
+            handle=handle,
+            verified=verified,
+            colour=colour,
+            badge=badge.value if badge else None,
         )
