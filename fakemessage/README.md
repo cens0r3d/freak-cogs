@@ -6,7 +6,7 @@ real role colour, the platform's own bubble and its own markdown.
 
 ```
 /fakemessage service:whatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
-/fakemessage service:x message:https://nwo.monster ist down name:Drangsal handle:drangsalinator
+/fakemessage service:x message:das war ich nicht name:Max handle:max
 [p]fakemessage whatsapp *nein* hab ich nicht geschrieben
 [p]fakemessage discord @someone i never said that
 ```
