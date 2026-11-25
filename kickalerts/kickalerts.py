@@ -85,8 +85,8 @@ TEMPLATE_FIELDS = (
 )
 
 #: Default name of the Discord scheduled event. It takes the same placeholders
-#: as a custom alert message.
-DEFAULT_EVENT_NAME = "{streamer} ist live"
+#: as a custom alert message, so a guild can localise it with one command.
+DEFAULT_EVENT_NAME = "{streamer} is live on Kick"
 #: Discord refuses an external event that starts in the past, so go-live is
 #: rounded up to the next minute; the event turns ACTIVE at that moment.
 EVENT_START_DELAY = 60

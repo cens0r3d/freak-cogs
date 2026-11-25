@@ -80,8 +80,8 @@ live, so members see the stream without reading a channel.
 - `[p]kickalert eventcover true|false` uses the stream thumbnail as cover image.
 - `[p]kickalert eventname` / `eventdescription` take the same placeholders as a
   custom message (`{streamer}` `{title}` `{game}` `{category}` `{url}`).
-  `reset` restores the defaults, which are `{streamer} ist live` and the stream
-  title followed by `category · link`.
+  `reset` restores the defaults: `{streamer} is live on Kick` as the title, and
+  the stream title followed by `category · link` as the description.
 - Per streamer the cog stores `event_id`, `event_stream_key` and `event_end`.
   A restart or reload therefore adopts a running stream instead of creating a
   second event, and an event whose stream ended while the bot was down is
