@@ -1,8 +1,9 @@
 # fakemessage
 
 Turns a member and a sentence into a screenshot of another app: Discord,
-WhatsApp, Telegram, X, Facebook, Reddit, Twitch chat or Kick chat. Real avatar,
-real role colour, the platform's own bubble and its own markdown.
+WhatsApp, Telegram, Instagram, Snapchat, X, Facebook, Reddit, Twitch chat or
+Kick chat. Real avatar, real role colour, the platform's own bubble, its own
+markdown, and optionally an attached picture.
 
 ```
 /fakemessage service:whatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
@@ -15,7 +16,7 @@ real role colour, the platform's own bubble and its own markdown.
 
 | Command | What it does |
 | --- | --- |
-| `/fakemessage service message [member] [name] [timestamp] [outgoing] [handle] [verified] [colour] [badge]` | Renders one card and posts it as `message.png`. |
+| `/fakemessage service message [member] [name] [timestamp] [outgoing] [handle] [verified] [colour] [badge] [image]` | Renders one card and posts it as `message.png`. |
 | `[p]fakemessage <service> [member] <text>` (alias `fake`) | Same card, from you; `discord` wants a member after the service. |
 
 Five pictures per minute per user, 2000 characters per message.
@@ -32,9 +33,17 @@ Five pictures per minute per user, 2000 characters per message.
 | `kick` | Chat line(s) with badge, brand-green name. | `member`, `name`, `colour`, `badge` |
 | `facebook` | Post: header with globe and menu, reaction bubbles, Like/Comment/Share bar. | `member`, `name`, `timestamp` |
 | `reddit` | Comment: thread rail, u/name, vote pill with arrows, Reply/Share/Save. | `member`, `name`, `timestamp` |
+| `instagram` | DM: blue outgoing bubble, media bubble on its own, time under the bubble. | `member`, `name`, `timestamp`, `outgoing` |
+| `snapchat` | Chat: blue outgoing bubble with "Opened · time" underneath. | `member`, `name`, `timestamp`, `outgoing` |
 
 `colour` is `#rrggbb`, `badge` is none/mod/sub/vip/founder, and every line break
 becomes another chat line on Twitch and Kick.
+
+A picture goes in through `image:` (slash) or simply as an attachment on the
+prefix command. It lands where each app puts it: flush inside the WhatsApp or
+Telegram bubble, its own bubble above the text on Instagram and Snapchat, below
+the text on X, Facebook, Reddit and Discord. Twitch and Kick have no pictures
+and ignore it. Limit 8 MB, image types only.
 
 ## Markdown, per platform
 

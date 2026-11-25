@@ -31,6 +31,7 @@ from .emoji import EmojiCache
 log = logging.getLogger("red.freak_cogs.fakemessage")
 
 MAX_CHARS = 2000
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
 AVATAR_TIMEOUT = aiohttp.ClientTimeout(total=10)
 BADGES = {"none": (), "mod": ("mod",), "sub": ("sub",), "vip": ("vip",), "founder": ("founder",)}
 SERVICES = {
@@ -50,6 +51,12 @@ SERVICES = {
     "fb": "facebook",
     "reddit": "reddit",
     "rd": "reddit",
+    "instagram": "instagram",
+    "ig": "instagram",
+    "insta": "instagram",
+    "snapchat": "snapchat",
+    "sc": "snapchat",
+    "snap": "snapchat",
 }
 
 
@@ -103,6 +110,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str] = None,
         timestamp: Optional[str] = None,
         bot: bool = False,
+        attachment: Optional[bytes] = None,
     ) -> bytes:
         text = message.strip()
         clusters = [match.group(0) for match in render.UNICODE_EMOJI_RE.finditer(text)]
@@ -132,6 +140,7 @@ class FakeMessage(commands.Cog):
                 bot=bot or member.bot,
                 name_color=colour,
                 emoji_images=emoji_images,
+                attachment=attachment,
             ),
         )
 
@@ -153,6 +162,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str],
         message: str,
         extra_emoji: Sequence[str] = (),
+        image: Optional[bytes] = None,
         **kwargs,
     ) -> bytes:
         shown = (name or (member.display_name if member else "")).strip() or "someone"
@@ -162,9 +172,30 @@ class FakeMessage(commands.Cog):
         return await loop.run_in_executor(
             None,
             functools.partial(
-                renderer, name=shown, message=message, avatar=avatar, images=images, **kwargs
+                renderer,
+                name=shown,
+                message=message,
+                avatar=avatar,
+                images=images,
+                image=image,
+                **kwargs,
             ),
         )
+
+    async def _attachment(self, attachment) -> Optional[bytes]:
+        """Read an uploaded picture, with the size and type the platforms accept."""
+        if attachment is None:
+            return None
+        ctype = (attachment.content_type or "").lower()
+        if ctype and not ctype.startswith("image/"):
+            raise ValueError("That attachment is not an image.")
+        if attachment.size > MAX_IMAGE_BYTES:
+            raise ValueError(
+                "That image is {:.1f} MB - {} MB is the limit.".format(
+                    attachment.size / 1048576, MAX_IMAGE_BYTES // 1048576
+                )
+            )
+        return await attachment.read()
 
     @staticmethod
     def _stamp(time: Optional[str]) -> str:
@@ -203,6 +234,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str],
         message: str,
         time: Optional[str] = None,
+        image: Optional[bytes] = None,
         outgoing: bool = False,
     ) -> bytes:
         return await self._card(
@@ -212,6 +244,7 @@ class FakeMessage(commands.Cog):
             message=message,
             time=self._stamp(time),
             outgoing=outgoing,
+            image=image,
         )
 
     async def _telegram(
@@ -220,6 +253,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str],
         message: str,
         time: Optional[str] = None,
+        image: Optional[bytes] = None,
         outgoing: bool = False,
     ) -> bytes:
         return await self._card(
@@ -229,6 +263,7 @@ class FakeMessage(commands.Cog):
             message=message,
             time=self._stamp(time),
             outgoing=outgoing,
+            image=image,
         )
 
     async def _tweet(
@@ -239,6 +274,7 @@ class FakeMessage(commands.Cog):
         handle: Optional[str] = None,
         verified: bool = False,
         time: Optional[str] = None,
+        image: Optional[bytes] = None,
     ) -> bytes:
         shown = (name or (member.display_name if member else "")).strip() or "someone"
         nick = (handle or (member.name if member else shown)).strip().lstrip("@")
@@ -250,6 +286,7 @@ class FakeMessage(commands.Cog):
             handle=nick,
             verified=verified,
             time=self._stamp(time),
+            image=image,
         )
 
     @staticmethod
@@ -288,6 +325,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str],
         message: str,
         time: Optional[str] = None,
+        image: Optional[bytes] = None,
     ) -> bytes:
         return await self._card(
             cards.facebook,
@@ -296,6 +334,7 @@ class FakeMessage(commands.Cog):
             message=message,
             time=(time or "").strip() or "Just now",
             extra_emoji=("\U0001F44D", "\u2764\ufe0f"),
+            image=image,
         )
 
     async def _reddit(
@@ -304,6 +343,7 @@ class FakeMessage(commands.Cog):
         name: Optional[str],
         message: str,
         time: Optional[str] = None,
+        image: Optional[bytes] = None,
     ) -> bytes:
         return await self._card(
             cards.reddit,
@@ -311,6 +351,45 @@ class FakeMessage(commands.Cog):
             name=name,
             message=message,
             time=(time or "").strip() or "5h ago",
+            image=image,
+        )
+
+    async def _instagram(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+        outgoing: bool = False,
+        image: Optional[bytes] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.instagram,
+            member=member,
+            name=name,
+            message=message,
+            time=self._stamp(time),
+            outgoing=outgoing,
+            image=image,
+        )
+
+    async def _snapchat(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+        outgoing: bool = False,
+        image: Optional[bytes] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.snapchat,
+            member=member,
+            name=name,
+            message=message,
+            time=self._stamp(time),
+            outgoing=outgoing,
+            image=image,
         )
 
     async def _dispatch(
@@ -326,24 +405,45 @@ class FakeMessage(commands.Cog):
         verified: bool = False,
         colour: Optional[str] = None,
         badge: Optional[str] = None,
+        image: Optional[bytes] = None,
     ) -> bytes:
         """One entry point: pick the renderer from the service name."""
         if service == "discord":
             if member is None:
                 raise ValueError("the discord card needs a member")
-            return await self._build(member, message, name=name, timestamp=timestamp)
+            return await self._build(
+                member, message, name=name, timestamp=timestamp, attachment=image
+            )
         if service == "whatsapp":
-            return await self._whatsapp(member, name, message, time=timestamp, outgoing=outgoing)
+            return await self._whatsapp(
+                member, name, message, time=timestamp, outgoing=outgoing, image=image
+            )
         if service == "telegram":
-            return await self._telegram(member, name, message, time=timestamp, outgoing=outgoing)
+            return await self._telegram(
+                member, name, message, time=timestamp, outgoing=outgoing, image=image
+            )
         if service == "x":
             return await self._tweet(
-                member, name, message, handle=handle, verified=verified, time=timestamp
+                member,
+                name,
+                message,
+                handle=handle,
+                verified=verified,
+                time=timestamp,
+                image=image,
             )
         if service == "facebook":
-            return await self._facebook(member, name, message, time=timestamp)
+            return await self._facebook(member, name, message, time=timestamp, image=image)
         if service == "reddit":
-            return await self._reddit(member, name, message, time=timestamp)
+            return await self._reddit(member, name, message, time=timestamp, image=image)
+        if service == "instagram":
+            return await self._instagram(
+                member, name, message, time=timestamp, outgoing=outgoing, image=image
+            )
+        if service == "snapchat":
+            return await self._snapchat(
+                member, name, message, time=timestamp, outgoing=outgoing, image=image
+            )
         return await self._chat(
             member, name, message, platform=service, colour=colour, badge=badge
         )
@@ -411,7 +511,15 @@ class FakeMessage(commands.Cog):
                 )
                 return
             text = remainder.strip()
-        await self._deliver_card(ctx, self._dispatch, text, member=member, service=key)
+        upload = ctx.message.attachments[0] if getattr(ctx.message, "attachments", None) else None
+        try:
+            picture = await self._attachment(upload)
+        except ValueError as error:
+            await ctx.send(str(error))
+            return
+        await self._deliver_card(
+            ctx, self._dispatch, text, member=member, service=key, image=picture
+        )
 
     @app_commands.command(name="fakemessage", description="Create a fake chat or post screenshot.")
     @app_commands.describe(
@@ -425,6 +533,7 @@ class FakeMessage(commands.Cog):
         verified="X: show the blue check",
         colour="Twitch/Kick: username colour as #rrggbb",
         badge="Twitch/Kick: badge in front of the name",
+        image="Optional picture to attach to the message (ignored by Twitch and Kick)",
     )
     @app_commands.choices(
         service=[
@@ -436,6 +545,8 @@ class FakeMessage(commands.Cog):
             app_commands.Choice(name="kick", value="kick"),
             app_commands.Choice(name="facebook", value="facebook"),
             app_commands.Choice(name="reddit", value="reddit"),
+            app_commands.Choice(name="instagram", value="instagram"),
+            app_commands.Choice(name="snapchat", value="snapchat"),
         ],
         badge=[
             app_commands.Choice(name="none", value="none"),
@@ -458,12 +569,18 @@ class FakeMessage(commands.Cog):
         verified: bool = False,
         colour: Optional[str] = None,
         badge: Optional[app_commands.Choice[str]] = None,
+        image: Optional[discord.Attachment] = None,
     ) -> None:
         if service.value == "discord" and member is None:
             await interaction.response.send_message(
                 "The discord card needs a member to copy the name and avatar from.",
                 ephemeral=True,
             )
+            return
+        try:
+            picture = await self._attachment(image)
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
             return
         await self._slash_card(
             interaction,
@@ -478,4 +595,5 @@ class FakeMessage(commands.Cog):
             verified=verified,
             colour=colour,
             badge=badge.value if badge else None,
+            image=picture,
         )

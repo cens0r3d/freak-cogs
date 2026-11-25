@@ -281,6 +281,52 @@ def _avatar(image: Optional[bytes], name: str, size: int, colour=(88, 101, 242))
     return tile
 
 
+def _fit_image(
+    data: Optional[bytes], max_w: int, max_h: int, radius: float = 6
+) -> Optional[Image.Image]:
+    """Decode an attachment and fit it into the card, corners rounded."""
+    if not data:
+        return None
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.load()
+    except (OSError, ValueError):
+        return None
+    image = image.convert("RGB")
+    if image.width <= 0 or image.height <= 0:
+        return None
+    scale = min(max_w / image.width, max_h / image.height, 2.0)
+    image = image.resize(
+        (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    mask = Image.new("L", (image.width * 4, image.height * 4), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, image.width * 4 - 1, image.height * 4 - 1), radius=int(radius * 4), fill=255
+    )
+    mask = mask.resize(image.size, Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    out.paste(image.convert("RGBA"), (0, 0), mask)
+    return out
+
+
+def _top_rounded(image: Image.Image, radius: float) -> Image.Image:
+    """Round only the top corners, so a photo sits flush in a bubble."""
+    mask = Image.new("L", (image.width * 4, image.height * 4), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, image.width * 4 - 1, image.height * 4 - 1),
+        radius=int(radius * 4),
+        fill=255,
+    )
+    ImageDraw.Draw(mask).rectangle(
+        (0, int(radius * 4), image.width * 4, image.height * 4), fill=255
+    )
+    mask = mask.resize(image.size, Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    out.paste(image.convert("RGBA"), (0, 0), mask)
+    return out
+
+
 def _bubble(draw: ImageDraw.ImageDraw, box, fill, radius, tail_side: Optional[str] = None):
     x0, y0, x1, y1 = box
     draw.rounded_rectangle((x0, y0, x1, y1), radius=radius, fill=fill)
@@ -309,6 +355,7 @@ def whatsapp(
     outgoing: bool = False,
     avatar: Optional[bytes] = None,
     status: str = "online",
+    image: Optional[bytes] = None,
     images: Optional[Dict[str, Image.Image]] = None,
 ) -> bytes:
     """One chat bubble under a WhatsApp header. Width ~ 420 css px."""
@@ -331,8 +378,18 @@ def whatsapp(
     tight = last_w + stamp_w + 6 * SCALE > text_limit
     extra = 16 * SCALE if tight else 0
     text_w = body.width if tight else max(others, last_w + stamp_w + 8 * SCALE)
-    bubble_w = text_w + pad_x * 2
-    bubble_h = body.height + pad_y * 2 + extra
+    photo = _fit_image(image, text_limit, 320 * SCALE)
+    if photo is not None:
+        target = max(body.width + pad_x * 2, photo.width)
+        tall = int(photo.height * target / photo.width)
+        photo = _top_rounded(photo.resize((target, tall), Image.Resampling.LANCZOS), 8)
+        photo_h = tall + 6 * SCALE
+        bubble_w = target
+        tight, extra = True, 16 * SCALE
+    else:
+        photo_h = 0
+        bubble_w = text_w + pad_x * 2
+    bubble_h = body.height + pad_y * 2 + extra + photo_h
 
     date_h = 34 * SCALE
     bubble_top = header + date_h
@@ -431,13 +488,21 @@ def whatsapp(
         tail = "left"
     box = (left, bubble_top, left + bubble_w, bubble_top + bubble_h)
     _bubble(draw, box, fill, 8 * SCALE, tail)
-    body.draw(canvas, left + pad_x, bubble_top + pad_y, WA_TEXT, link_colour=(83, 189, 235))
+    if photo is not None:
+        canvas.paste(photo, (left, bubble_top), photo)
+    body.draw(
+        canvas,
+        left + pad_x,
+        bubble_top + pad_y + photo_h,
+        WA_TEXT,
+        link_colour=(83, 189, 235),
+    )
 
     # time + ticks, bottom right of the bubble
     stamp_x = (
         left + bubble_w - pad_x - stamp_w if tight else left + pad_x + last_w + 8 * SCALE
     )
-    stamp_y = bubble_top + pad_y + body.height + extra - 3 * SCALE
+    stamp_y = bubble_top + pad_y + photo_h + body.height + extra - 3 * SCALE
     draw.text((stamp_x, stamp_y), time, font=time_font, fill=WA_MUTED, anchor="ls")
     if outgoing:
         tick_x = stamp_x + int(time_font.getlength(time)) + 5 * SCALE
@@ -474,6 +539,7 @@ def telegram(
     outgoing: bool = False,
     avatar: Optional[bytes] = None,
     status: str = "online",
+    image: Optional[bytes] = None,
     images: Optional[Dict[str, Image.Image]] = None,
 ) -> bytes:
     """One Telegram bubble under the chat header. Width ~ 420 css px."""
@@ -492,8 +558,18 @@ def telegram(
     tight = last_w + stamp_w + 6 * SCALE > 300 * SCALE
     extra = 15 * SCALE if tight else 0
     text_w = body.width if tight else max(others, last_w + stamp_w + 8 * SCALE)
-    bubble_w = text_w + pad_x * 2
-    bubble_h = body.height + pad_y * 2 + extra + 2 * SCALE
+    photo = _fit_image(image, 300 * SCALE, 320 * SCALE)
+    if photo is not None:
+        target = max(body.width + pad_x * 2, photo.width)
+        tall = int(photo.height * target / photo.width)
+        photo = _top_rounded(photo.resize((target, tall), Image.Resampling.LANCZOS), 12)
+        photo_h = tall + 6 * SCALE
+        bubble_w = target
+        tight, extra = True, 15 * SCALE
+    else:
+        photo_h = 0
+        bubble_w = text_w + pad_x * 2
+    bubble_h = body.height + pad_y * 2 + extra + 2 * SCALE + photo_h
 
     bubble_top = header + 14 * SCALE
     height = bubble_top + bubble_h + 20 * SCALE
@@ -526,12 +602,20 @@ def telegram(
         tail = "left"
     box = (left, bubble_top, left + bubble_w, bubble_top + bubble_h)
     _bubble(draw, box, fill, 12 * SCALE, tail)
-    body.draw(canvas, left + pad_x, bubble_top + pad_y, TG_TEXT, link_colour=(106, 178, 242))
+    if photo is not None:
+        canvas.paste(photo, (left, bubble_top), photo)
+    body.draw(
+        canvas,
+        left + pad_x,
+        bubble_top + pad_y + photo_h,
+        TG_TEXT,
+        link_colour=(106, 178, 242),
+    )
 
     stamp_x = (
         left + bubble_w - pad_x - stamp_w if tight else left + pad_x + last_w + 8 * SCALE
     )
-    stamp_y = bubble_top + pad_y + body.height + extra - 2 * SCALE
+    stamp_y = bubble_top + pad_y + photo_h + body.height + extra - 2 * SCALE
     draw.text((stamp_x, stamp_y), time, font=time_font, fill=(160, 176, 190), anchor="ls")
     if outgoing:
         tick_x = stamp_x + int(time_font.getlength(time)) + 4 * SCALE
@@ -622,6 +706,7 @@ def tweet(
     retweets: str = "1.2K",
     likes: str = "8.4K",
     views: str = "412K",
+    image: Optional[bytes] = None,
     images: Optional[Dict[str, Image.Image]] = None,
 ) -> bytes:
     """One post on X's lights-out dark theme. Width ~ 600 css px."""
@@ -635,7 +720,9 @@ def tweet(
 
     header_y = pad
     text_y = header_y + 26 * SCALE
-    meta_y = text_y + body.height + 12 * SCALE
+    photo = _fit_image(image, text_limit, 300 * SCALE, radius=16)
+    photo_h = (photo.height + 12 * SCALE) if photo is not None else 0
+    meta_y = text_y + body.height + photo_h + 12 * SCALE
     row_y = meta_y + 30 * SCALE
     height = row_y + 20 * SCALE + pad
 
@@ -672,6 +759,8 @@ def tweet(
     draw.text((x, header_y + 18 * SCALE), "@" + handle.lstrip("@"), font=handle_font, fill=(113, 118, 123), anchor="ls")
 
     body.draw(canvas, gutter, text_y, (231, 233, 234), link_colour=(29, 155, 240))
+    if photo is not None:
+        canvas.paste(photo, (gutter, text_y + body.height + 12 * SCALE), photo)
 
     meta_font = _font(int(13 * SCALE))
     meta = time + (" · " + date if date else "")
@@ -730,6 +819,7 @@ def chat(
     width: int = 340,
     images: Optional[Dict[str, Image.Image]] = None,
     avatar: Optional[bytes] = None,  # chat columns have no avatars; kept for the caller
+    image: Optional[bytes] = None,  # nor pictures; accepted so one dispatcher fits all
 ) -> bytes:
     """Chat lines for Twitch or Kick: one line per message line."""
     brand = (0, 255, 127) if platform == "kick" else (145, 71, 255)
@@ -902,6 +992,7 @@ def facebook(
     reactions: str = "1.4K",
     comments: str = "86",
     shares: str = "12",
+    image: Optional[bytes] = None,
     images: Optional[Dict[str, Image.Image]] = None,
 ) -> bytes:
     """One Facebook post: header, text, reaction bubbles and the action bar."""
@@ -915,7 +1006,9 @@ def facebook(
 
     header_y = pad
     text_y = header_y + 58 * SCALE
-    react_y = text_y + body.height + 12 * SCALE
+    photo = _fit_image(image, text_limit, 300 * SCALE, radius=8)
+    photo_h = (photo.height + 10 * SCALE) if photo is not None else 0
+    react_y = text_y + body.height + photo_h + 12 * SCALE
     divider_y = react_y + 28 * SCALE
     height = divider_y + 44 * SCALE
 
@@ -958,6 +1051,8 @@ def facebook(
         draw.ellipse((cx, cy, cx + 3 * SCALE, cy + 3 * SCALE), fill=FB_MUTED)
 
     body.draw(canvas, gutter, text_y, FB_TEXT, link_colour=(69, 155, 240))
+    if photo is not None:
+        canvas.paste(photo, (gutter, text_y + body.height + 10 * SCALE), photo)
 
     # reaction bubbles: like in blue, love in red, overlapping
     bubble = 18 * SCALE
@@ -1022,6 +1117,7 @@ def reddit(
     time: str = "5h ago",
     avatar: Optional[bytes] = None,
     score: str = "1.2k",
+    image: Optional[bytes] = None,
     images: Optional[Dict[str, Image.Image]] = None,
 ) -> bytes:
     """One Reddit comment: thread rail, u/name, text, vote pill and actions."""
@@ -1036,7 +1132,9 @@ def reddit(
 
     header_y = pad
     text_y = header_y + 30 * SCALE
-    actions_y = text_y + body.height + 12 * SCALE
+    photo = _fit_image(image, text_limit, 300 * SCALE, radius=6)
+    photo_h = (photo.height + 10 * SCALE) if photo is not None else 0
+    actions_y = text_y + body.height + photo_h + 12 * SCALE
     height = actions_y + 26 * SCALE + pad
 
     canvas = Image.new("RGB", (width, height), RD_BG)
@@ -1061,6 +1159,8 @@ def reddit(
     )
 
     body.draw(canvas, gutter, text_y, RD_TEXT, link_colour=(69, 155, 240))
+    if photo is not None:
+        canvas.paste(photo, (gutter, text_y + body.height + 10 * SCALE), photo)
 
     # vote pill: measure the contents, draw the pill, then the contents on top
     score_font = _font(int(12 * SCALE), bold=True)
@@ -1112,3 +1212,204 @@ def reddit(
         cy = pill_y + 12 * SCALE
         draw.ellipse((cx, cy, cx + 3 * SCALE, cy + 3 * SCALE), fill=RD_MUTED)
     return _png(canvas, width, height)
+
+# -- Instagram / Snapchat ------------------------------------------------
+
+
+def _messenger(
+    *,
+    name: str,
+    message: str,
+    time: str,
+    outgoing: bool,
+    avatar: Optional[bytes],
+    status: str,
+    bg,
+    header_bg,
+    bubble_in,
+    bubble_out,
+    text_colour,
+    muted,
+    radius: float,
+    accent,
+    mark: Optional[str] = None,
+    width: int = 420,
+    images: Optional[Dict[str, Image.Image]] = None,
+    image: Optional[bytes] = None,
+) -> bytes:
+    """Shared mobile-messenger layout: media bubble above, text bubble, time below."""
+    device_w = width * SCALE
+    header_h = 56 * SCALE
+    pad_x = 12 * SCALE
+    pad_y = 9 * SCALE
+
+    body = Rich(message, 14.5, markers=MARKERS["chat"], images=images, line_height=19.5)
+    body.wrap(288 * SCALE)
+
+    text_w = body.width + pad_x * 2
+    text_h = body.height + pad_y * 2
+    photo = _fit_image(image, 288 * SCALE, 300 * SCALE)
+    photo_h = 0
+    if photo is not None:
+        photo = _top_rounded(photo, radius)
+        photo_h = photo.height
+
+    gap = 4 * SCALE
+    top = header_h + 16 * SCALE
+    photo_top = top
+    text_top = top + (photo_h + gap if photo is not None else 0)
+    time_font = _font(int(10 * SCALE))
+    stamp = ("Opened · " + time) if mark == "opened" else time
+    stamp_y = text_top + text_h + 5 * SCALE
+    height = stamp_y + 14 * SCALE + 12 * SCALE
+
+    canvas = Image.new("RGB", (device_w, height), bg)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rectangle((0, 0, device_w, header_h), fill=header_bg)
+    draw.line((0, header_h, device_w, header_h), fill=(38, 38, 38), width=SCALE)
+
+    # back chevron, then the avatar clear of it
+    draw.line(
+        (30 * SCALE, header_h / 2 - 7 * SCALE, 21 * SCALE, header_h / 2),
+        fill=text_colour,
+        width=2 * SCALE,
+    )
+    draw.line(
+        (21 * SCALE, header_h / 2, 30 * SCALE, header_h / 2 + 7 * SCALE),
+        fill=text_colour,
+        width=2 * SCALE,
+    )
+
+    avatar_size = 36 * SCALE
+    tile = _avatar(avatar, name, avatar_size, accent)
+    canvas.paste(tile, (42 * SCALE, (header_h - avatar_size) // 2), tile)
+
+    name_font = _font(int(15 * SCALE), bold=True)
+    label_x = 42 * SCALE + avatar_size + 10 * SCALE
+    draw.text((label_x, header_h / 2 - 5 * SCALE), name, font=name_font, fill=text_colour, anchor="ls")
+    draw.text(
+        (label_x, header_h / 2 + 12 * SCALE),
+        status,
+        font=_font(int(11.5 * SCALE)),
+        fill=muted,
+        anchor="ls",
+    )
+
+    icon_y = header_h / 2
+    video_x = device_w - 66 * SCALE
+    draw.rounded_rectangle(
+        (video_x, icon_y - 6 * SCALE, video_x + 12 * SCALE, icon_y + 5 * SCALE),
+        radius=3 * SCALE,
+        outline=text_colour,
+        width=2 * SCALE,
+    )
+    draw.polygon(
+        [
+            (video_x + 14 * SCALE, icon_y - 5 * SCALE),
+            (video_x + 20 * SCALE, icon_y),
+            (video_x + 14 * SCALE, icon_y + 5 * SCALE),
+        ],
+        fill=text_colour,
+    )
+    phone_x = device_w - 34 * SCALE
+    draw.arc(
+        (phone_x, icon_y - 9 * SCALE, phone_x + 18 * SCALE, icon_y + 9 * SCALE),
+        start=210,
+        end=330,
+        fill=text_colour,
+        width=2 * SCALE,
+    )
+    draw.line((phone_x + 3 * SCALE, icon_y - 7 * SCALE, phone_x + 3 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
+    draw.line((phone_x + 15 * SCALE, icon_y - 7 * SCALE, phone_x + 15 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
+
+    def side(bubble_width: int) -> int:
+        if outgoing:
+            return device_w - 12 * SCALE - bubble_width
+        return 12 * SCALE
+
+    if photo is not None:
+        _bubble(draw, (side(photo.width), photo_top, side(photo.width) + photo.width, photo_top + photo_h), bubble_out if outgoing else bubble_in, radius)
+        canvas.paste(photo, (side(photo.width), photo_top), photo)
+
+    _bubble(
+        draw,
+        (side(text_w), text_top, side(text_w) + text_w, text_top + text_h),
+        bubble_out if outgoing else bubble_in,
+        radius,
+    )
+    body.draw(canvas, side(text_w) + pad_x, text_top + pad_y, (250, 250, 250))
+
+    draw.text(
+        (device_w - 12 * SCALE if outgoing else 12 * SCALE, stamp_y),
+        stamp,
+        font=time_font,
+        fill=muted,
+        anchor="rs" if outgoing else "ls",
+    )
+    return _png(canvas, device_w, height)
+
+
+def instagram(
+    *,
+    name: str,
+    message: str,
+    time: str = "21:07",
+    outgoing: bool = False,
+    avatar: Optional[bytes] = None,
+    status: str = "Active now",
+    images: Optional[Dict[str, Image.Image]] = None,
+    image: Optional[bytes] = None,
+) -> bytes:
+    """An Instagram direct message, dark mode."""
+    return _messenger(
+        name=name,
+        message=message,
+        time=time,
+        outgoing=outgoing,
+        avatar=avatar,
+        status=status,
+        bg=(0, 0, 0),
+        header_bg=(0, 0, 0),
+        bubble_in=(38, 38, 38),
+        bubble_out=(55, 151, 240),
+        text_colour=(245, 245, 245),
+        muted=(142, 142, 142),
+        radius=18,
+        accent=(221, 42, 123),
+        images=images,
+        image=image,
+    )
+
+
+def snapchat(
+    *,
+    name: str,
+    message: str,
+    time: str = "21:07",
+    outgoing: bool = False,
+    avatar: Optional[bytes] = None,
+    status: str = "Active now",
+    images: Optional[Dict[str, Image.Image]] = None,
+    image: Optional[bytes] = None,
+) -> bytes:
+    """A Snapchat chat, dark mode, with the 'Opened' marker on sent messages."""
+    return _messenger(
+        name=name,
+        message=message,
+        time=time,
+        outgoing=outgoing,
+        avatar=avatar,
+        status=status,
+        bg=(18, 18, 18),
+        header_bg=(12, 12, 12),
+        bubble_in=(44, 44, 44),
+        bubble_out=(15, 173, 255),
+        text_colour=(255, 255, 255),
+        muted=(160, 160, 160),
+        radius=20,
+        accent=(255, 252, 0),
+        mark="opened" if outgoing else None,
+        images=images,
+        image=image,
+    )

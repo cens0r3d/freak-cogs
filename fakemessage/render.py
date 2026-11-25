@@ -444,6 +444,33 @@ def _circle(image: Image.Image, size: int) -> Image.Image:
     return out
 
 
+def _rounded_picture(data: Optional[bytes], max_w: int, max_h: int, radius: float):
+    """An attachment scaled into the message column, corners rounded."""
+    if not data:
+        return None
+    try:
+        picture = Image.open(io.BytesIO(data))
+        picture.load()
+    except (OSError, ValueError):
+        return None
+    picture = picture.convert("RGB")
+    if picture.width <= 0 or picture.height <= 0:
+        return None
+    scale = min(max_w / picture.width, max_h / picture.height, 2.0)
+    picture = picture.resize(
+        (max(1, int(picture.width * scale)), max(1, int(picture.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    mask = Image.new("L", (picture.width * 4, picture.height * 4), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, picture.width * 4 - 1, picture.height * 4 - 1), radius=int(radius * 4), fill=255
+    )
+    mask = mask.resize(picture.size, Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", picture.size, (0, 0, 0, 0))
+    out.paste(picture.convert("RGBA"), (0, 0), mask)
+    return out
+
+
 def _initials_avatar(name: str, size: int) -> Image.Image:
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -468,6 +495,7 @@ def render(
     bot: bool = False,
     name_color: Optional[Tuple[int, int, int]] = None,
     emoji_images: Optional[Dict[str, Image.Image]] = None,
+    attachment: Optional[bytes] = None,
     width: int = WIDTH,
 ) -> bytes:
     """Render one message row as a PNG and return the file bytes."""
@@ -487,7 +515,9 @@ def render(
     top = 12
     header_top = top
     body_top = header_top + HEADER + 2
-    height = body_top + max(len(lines), 1) * LINE + 12
+    picture = _rounded_picture(attachment, min(400, width - TEXT_X - RIGHT) * SCALE, 300 * SCALE, 8)
+    picture_h = (picture.height + 8 * SCALE) if picture is not None else 0
+    height = body_top + max(len(lines), 1) * LINE + picture_h + 12
 
     canvas = Image.new("RGB", (width * SCALE, height * SCALE), BG)
     draw = ImageDraw.Draw(canvas)
@@ -607,6 +637,13 @@ def render(
                     radius=3 * SCALE,
                     fill=SPOILER_BG,
                 )
+
+    if picture is not None:
+        canvas.paste(
+            picture,
+            (TEXT_X * SCALE, body_top + max(len(lines), 1) * LINE + 8 * SCALE),
+            picture,
+        )
 
     final = canvas.resize((width, height), Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
