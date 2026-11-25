@@ -1,31 +1,39 @@
 # fakemessage
 
-Turns one member and one sentence into a Discord dark-theme screenshot: real
-avatar, real role colour, BOT tag, markdown, mentions, links and emoji.
+Turns a member and a sentence into a screenshot of another app: Discord,
+WhatsApp, Telegram, X, Twitch chat or Kick chat. Real avatar, real role colour,
+the platform's own bubble and its own markdown.
 
 ```
 /fakemessage member:@someone message:i never said that
+/fakewhatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
+/faketweet message:https://nwo.monster ist down name:Drangsal handle:drangsalinator
 [p]fakemessage @someone i never said that
 ```
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `/fakemessage member message [name] [timestamp] [bot_tag]` | Renders the message and posts it as `message.png`. |
-| `[p]fakemessage <member> <message>` (alias `fakemsg`) | Same picture, without the optional overrides. |
+| Slash | Prefix | Renders |
+| --- | --- | --- |
+| `/fakemessage` | `[p]fakemessage` (`fakemsg`) | Discord message: role colour, BOT tag, mentions, spoilers, `code`. |
+| `/fakewhatsapp` | `[p]fakewa` | WhatsApp chat: header, TODAY chip, bubble, time, blue ticks when outgoing. |
+| `/faketelegram` | `[p]faketg` | Telegram chat: header, bubble, time and check marks. |
+| `/faketweet` | `[p]faketweet` (`faketw`) | X post: name, handle, blue check, meta line, engagement row. |
+| `/faketwitch` | `[p]faketwitch` | Twitch chat line(s): badge, coloured name, message. |
+| `/fakekick` | `[p]fakekick` | Kick chat line(s): badge, brand-green name, message. |
 
-Slash options: `name` shows a username other than the member's, `timestamp`
-replaces `Today at HH:MM` (e.g. `Yesterday at 23:12`), `bot_tag` adds the BOT
-badge. Five pictures per minute per user; 2000 characters per message.
+Every command takes `message`, plus `member` (whose avatar and name) and `name`
+to override. The chat commands add `time`; WhatsApp and Telegram also take
+`outgoing`. The post adds `handle`, `verified`, `time`, `date` and the four
+counts. Twitch and Kick take `colour` (#rrggbb) and `badge`
+(none/mod/sub/vip/founder), and every line break becomes another chat line.
 
-## What ends up in the picture
+## Markdown, per platform
 
-Avatar and role colour come from the member, so the result matches the person
-in this server. Markdown is rendered, not printed: `**bold**`, `*italic*`,
-`__underline__`, `~~strike~~`, `` `code` ``, `||spoiler||`, `@mention`, `#channel`
-and bare links. Emoji are Twemoji - the same set the client draws - and custom
-emoji from `<:name:id>` are fetched from Discord's CDN.
+WhatsApp uses `*bold*`, `_italic_`, `~strike~` and `` `mono` ``; Telegram uses
+`**bold**`, `__italic__`, `~~strike~~` and backticks; X and the chat platforms
+render text as typed. Emoji are Twemoji, the set the client itself draws, and
+custom emoji from `<:name:id>` come from Discord's CDN.
 
 ## Setup
 
@@ -33,16 +41,21 @@ emoji from `<:name:id>` are fetched from Discord's CDN.
 2. Give the bot **Attach Files** in the channel.
 3. Pillow has to be in the bot's venv: `[p]pipinstall pillow`.
 
-Emoji pictures are cached under the cog's data path, so a repeat render costs
-no requests and an offline bot still draws what it has seen.
+Emoji pictures are cached under the cog's data path, so a repeat render costs no
+requests and an offline bot still draws what it has seen.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| `/fakemessage` does not appear in Discord | Red parks new slash commands disabled: `[p]slash enablecog fakemessage`, then `[p]slash sync`. |
-| "I could not draw that message" | Pillow missing in the bot venv, or the log has the traceback: `[p]pipinstall pillow`. |
+| The slash commands do not appear | Red parks new slash commands disabled: `[p]slash enablecog fakemessage`, then `[p]slash sync`. |
+| "I could not draw that" | Pillow missing in the bot venv, or the log has the traceback: `[p]pipinstall pillow`. |
 | Nothing is sent at all | The bot lacks Attach Files in that channel; `embed_links` is not enough. |
 | Emoji show as plain symbols | The Twemoji/CDN request failed (no outbound network); cached emoji still render. |
 | Avatar is a coloured letter | The avatar download failed; the rest of the picture still renders. |
-| Need a person who is not on the server | Pass `member` as any member and override `name`, or use `name` with a placeholder avatar. |
+| Bold or strike does not apply | Wrong marker for the platform: WhatsApp `*bold*`, Telegram `**bold**`, X has no markdown. |
+
+## Ideas for later
+
+Instagram DM, iMessage, Reddit comment, YouTube live chat, Steam chat - each is
+one renderer in `cards.py` plus one thin command.

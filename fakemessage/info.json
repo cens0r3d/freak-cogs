@@ -2,15 +2,20 @@
   "author": [
     "cens0r3d"
   ],
-  "install_msg": "fakemessage loaded. Use `/fakemessage` or `[p]fakemessage @user <text>`. Run `[p]slash enablecog fakemessage` and then `[p]slash sync` to publish the slash command. The bot needs Attach Files, and the host needs Pillow (`[p]pipinstall pillow`).",
+  "install_msg": "fakemessage loaded. `/fakemessage`, `/fakewhatsapp`, `/faketelegram`, `/faketweet`, `/faketwitch`, `/fakekick` (prefix: `[p]fakewa`, `[p]faketg`, `[p]faketweet`, `[p]faketwitch`, `[p]fakekick`). Run `[p]slash enablecog fakemessage` and then `[p]slash sync` to publish the slash commands. The bot needs Attach Files, the host needs Pillow (`[p]pipinstall pillow`).",
   "name": "fakemessage",
-  "short": "Fake Discord message screenshots",
-  "description": "Renders one message as a Discord dark-theme screenshot: avatar, role colour, BOT tag, markdown, mentions, links and emoji. Pillow draws it at 2x and downsamples once, so the text and avatar edges stay clean.",
+  "short": "Fake chat and post screenshots",
+  "description": "Renders one message as a screenshot of Discord, WhatsApp, Telegram, X, Twitch chat or Kick chat: real avatar and role colour, the platform's own bubble, its own markdown and Twemoji. Pillow draws at 2x and downsamples once.",
   "end_user_data_statement": "This cog does not store any user data. Avatars and emoji are fetched while a command runs and cached as pictures; nothing is tied to a user id.",
   "tags": [
     "fun",
     "image",
-    "meme"
+    "meme",
+    "whatsapp",
+    "telegram",
+    "twitter",
+    "twitch",
+    "kick"
   ],
   "requirements": [
     "pillow>=10.0"
