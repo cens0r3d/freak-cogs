@@ -579,12 +579,22 @@ def telegram(
 
     draw.rectangle((0, 0, width, header), fill=TG_HEADER)
     draw.line((0, header, width, header), fill=(11, 18, 27), width=SCALE)
+    draw.line(
+        (24 * SCALE, header / 2 - 6 * SCALE, 16 * SCALE, header / 2),
+        fill=TG_MUTED,
+        width=2 * SCALE,
+    )
+    draw.line(
+        (16 * SCALE, header / 2, 24 * SCALE, header / 2 + 6 * SCALE),
+        fill=TG_MUTED,
+        width=2 * SCALE,
+    )
     avatar_size = 38 * SCALE
     tile = _avatar(avatar, name, avatar_size, (82, 136, 193))
-    canvas.paste(tile, (14 * SCALE, (header - avatar_size) // 2), tile)
+    canvas.paste(tile, (34 * SCALE, (header - avatar_size) // 2), tile)
     name_font = _font(int(16 * SCALE), bold=True)
-    draw.text((62 * SCALE, header / 2 - 5 * SCALE), name, font=name_font, fill=TG_TEXT, anchor="ls")
-    draw.text((62 * SCALE, header / 2 + 12 * SCALE), status, font=_font(int(12 * SCALE)), fill=TG_MUTED, anchor="ls")
+    draw.text((82 * SCALE, header / 2 - 5 * SCALE), name, font=name_font, fill=TG_TEXT, anchor="ls")
+    draw.text((82 * SCALE, header / 2 + 12 * SCALE), status, font=_font(int(12 * SCALE)), fill=TG_MUTED, anchor="ls")
     for i in range(3):
         y = header / 2 - 6 * SCALE + i * 6 * SCALE
         draw.ellipse(
