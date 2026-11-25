@@ -1,0 +1,26 @@
+{
+  "author": [
+    "cens0r3d"
+  ],
+  "install_msg": "fakemessage loaded. Use `/fakemessage` or `[p]fakemessage @user <text>`. Run `[p]slash enablecog fakemessage` and then `[p]slash sync` to publish the slash command. The bot needs Attach Files, and the host needs Pillow (`[p]pipinstall pillow`).",
+  "name": "fakemessage",
+  "short": "Fake Discord message screenshots",
+  "description": "Renders one message as a Discord dark-theme screenshot: avatar, role colour, BOT tag, markdown, mentions, links and emoji. Pillow draws it at 2x and downsamples once, so the text and avatar edges stay clean.",
+  "end_user_data_statement": "This cog does not store any user data. Avatars and emoji are fetched while a command runs and cached as pictures; nothing is tied to a user id.",
+  "tags": [
+    "fun",
+    "image",
+    "meme"
+  ],
+  "requirements": [
+    "pillow>=10.0"
+  ],
+  "min_bot_version": "3.5.0",
+  "hidden": false,
+  "disabled": false,
+  "type": "COG",
+  "min_python_version": [
+    3,
+    9
+  ]
+}

@@ -40,6 +40,7 @@ running bot and fixed by hand.
 | [goabase](goabase/README.md) | Goa/Psytrance party feed from goabase.net. |
 | [dbd](deadbydaylight/README.md) | Dead by Daylight data: killers, survivors, perks, items, maps. |
 | [psychonaut](psychonaut/README.md) | PsychonautWiki reference: substance class, doses, duration, effects. |
+| [fakemessage](fakemessage/README.md) | Fake Discord message screenshots: any member, any text, rendered as a chat picture. |
 | [diskinfo](diskinfo/README.md) | Disk usage of the bot's host: an embed with bars, plus an optional PNG chart. |
 
 Every cog folder has its own README with the full command list, setup steps and troubleshooting.
