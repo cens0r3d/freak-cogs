@@ -84,6 +84,28 @@ TEMPLATE_FIELDS = (
     "uptime",
 )
 
+#: Default name of the Discord scheduled event. It takes the same placeholders
+#: as a custom alert message.
+DEFAULT_EVENT_NAME = "{streamer} ist live"
+#: Discord refuses an external event that starts in the past, so go-live is
+#: rounded up to the next minute; the event turns ACTIVE at that moment.
+EVENT_START_DELAY = 60
+#: Nominal length in hours. The API completes an external event at its end time,
+#: so a running stream extends it (see ``EVENT_EXTEND_BEFORE``).
+EVENT_DEFAULT_HOURS = 8
+MIN_EVENT_HOURS = 1
+MAX_EVENT_HOURS = 12
+#: Extend the end time when less than this many seconds are left.
+EVENT_EXTEND_BEFORE = 3600
+#: Field limits of a guild scheduled event.
+EVENT_NAME_LIMIT = 100
+EVENT_DESCRIPTION_LIMIT = 1000
+EVENT_LOCATION_LIMIT = 100
+#: Discord accepts an event cover of up to 10 MB; stay below it.
+EVENT_IMAGE_LIMIT = 8 * 1024 * 1024
+#: What happens to the event when the stream ends.
+EVENT_OFFLINE_MODES = ("delete", "complete")
+
 DEFAULT_GLOBAL: Dict[str, Any] = {
     "legacy_client_id": None,
     "legacy_client_secret": None,
@@ -108,6 +130,12 @@ DEFAULT_GUILD: Dict[str, Any] = {
     "clips_channel_id": None,
     "clips_attach": True,
     "clips_max_mb": 20,
+    "events_enabled": False,
+    "event_hours": EVENT_DEFAULT_HOURS,
+    "event_cover": True,
+    "event_offline": "delete",
+    "event_name": DEFAULT_EVENT_NAME,
+    "event_description": None,
 }
 
 #: Keys every streamer entry carries; missing ones fall back to these.
@@ -132,6 +160,10 @@ STREAMER_DEFAULTS: Dict[str, Any] = {
     "seen_clips": [],
     "clips_primed": False,
     "clip_message_id": None,
+    "events": True,
+    "event_id": None,
+    "event_stream_key": None,
+    "event_end": None,
 }
 
 SLUG_RE = re.compile(r"^[a-z0-9_-]{1,25}$")
@@ -399,6 +431,28 @@ def render_template(template: str, info: StreamInfo) -> str:
     return TEMPLATE_RE.sub(replace, template)
 
 
+def build_event_description(info: StreamInfo, template: Optional[str]) -> str:
+    """The description of the Discord event, clamped to Discord's limit.
+
+    Without a custom template the title leads and a second line carries the
+    category and the channel link, which is what an event card has room for.
+    """
+    if template:
+        return render_template(template, info).strip()[:EVENT_DESCRIPTION_LIMIT]
+    lines = [info.title or f"{info.slug} is live on Kick"]
+    tail = " · ".join(part for part in (info.category, info.url) if part)
+    if tail:
+        lines.append(tail)
+    return "\n".join(lines)[:EVENT_DESCRIPTION_LIMIT]
+
+
+def build_event_name(info: StreamInfo, template: Optional[str]) -> str:
+    """The event title, clamped to Discord's 100 character limit."""
+    text = render_template(template or DEFAULT_EVENT_NAME, info).strip()
+    text = " ".join(text.split()) or render_template(DEFAULT_EVENT_NAME, info)
+    return text[:EVENT_NAME_LIMIT]
+
+
 def clean_slug(value: str) -> str:
     """Normalise user input into a Kick slug; accepts a channel URL too."""
     return _clean_slug(value)
@@ -498,6 +552,12 @@ def _clamp_update_seconds(seconds: Any) -> int:
     return max(60, min(3600, value))
 
 
+def _clamp_event_hours(hours: Any) -> int:
+    """Clamp the nominal event length into ``[MIN, MAX]_EVENT_HOURS``."""
+    value = _as_int(hours) or EVENT_DEFAULT_HOURS
+    return max(MIN_EVENT_HOURS, min(MAX_EVENT_HOURS, value))
+
+
 def _stamp(moment: Optional[datetime], style: str = "R") -> Optional[str]:
     """Discord timestamp markup for a datetime."""
     if moment is None:
@@ -583,6 +643,30 @@ class KickAPI:
             if retry_after is not None and isinstance(payload, dict):
                 payload.setdefault("retry_after", retry_after)
             return response.status, payload
+
+    async def fetch_bytes(
+        self, url: str, *, limit: int = EVENT_IMAGE_LIMIT
+    ) -> Optional[bytes]:
+        """Download a small file (the event cover) or return ``None``.
+
+        The cover is cosmetic, so every failure is a quiet ``None`` instead of
+        an exception the caller has to handle.
+        """
+        if not url:
+            return None
+        await self.open()
+        if self._session is None:
+            return None
+        try:
+            async with self._session.get(url) as response:
+                if response.status != 200:
+                    return None
+                if (response.content_length or 0) > limit:
+                    return None
+                data = await response.content.read(limit + 1)
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return None
+        return data if 0 < len(data) <= limit else None
 
     async def _request_json(
         self,
@@ -910,6 +994,33 @@ class EmbedSettings:
         return timezone(timedelta(hours=max(-12, min(14, self.timezone_offset))))
 
 
+@dataclass(slots=True)
+class EventSettings:
+    """How a guild wants its Discord scheduled events built."""
+
+    enabled: bool = False
+    hours: int = EVENT_DEFAULT_HOURS
+    cover: bool = True
+    offline: str = "delete"
+    name: Optional[str] = DEFAULT_EVENT_NAME
+    description: Optional[str] = None
+
+    @classmethod
+    def from_guild_config(cls, data: Dict[str, Any]) -> "EventSettings":
+        """Build settings from a raw guild config dict."""
+        mode = str(data.get("event_offline") or "delete").lower()
+        name = data.get("event_name")
+        description = data.get("event_description")
+        return cls(
+            enabled=bool(data.get("events_enabled", False)),
+            hours=_clamp_event_hours(data.get("event_hours")),
+            cover=bool(data.get("event_cover", True)),
+            offline=mode if mode in EVENT_OFFLINE_MODES else "delete",
+            name=str(name) if name else None,
+            description=str(description) if description else None,
+        )
+
+
 def build_live_embed(info: StreamInfo, settings: EmbedSettings) -> discord.Embed:
     """The "is live" announcement embed."""
     embed = discord.Embed(
@@ -1147,6 +1258,8 @@ class KickAlerts(commands.Cog):
         self._clip_lock = asyncio.Semaphore(1)
         self._last_poll: Optional[datetime] = None
         self._last_result: Dict[str, int] = {}
+        #: Guilds already warned about the missing Create Events permission.
+        self._event_permission_warned: set = set()
 
     # -- lifecycle ---------------------------------------------------------- #
     async def cog_load(self) -> None:
@@ -1517,6 +1630,7 @@ class KickAlerts(commands.Cog):
         update_seconds = _clamp_update_seconds(data.get("live_update_seconds"))
         global_channel = data.get("global_channel_id")
         global_role = data.get("global_ping_role_id")
+        events = EventSettings.from_guild_config(data)
         counts = {"live": 0, "alerts": 0}
         for slug, entry in (data.get("streamers") or {}).items():
             info = channels.get(slug)
@@ -1531,6 +1645,7 @@ class KickAlerts(commands.Cog):
                 entry,
                 info,
                 settings,
+                events=events,
                 auto_delete=auto_delete,
                 edit_live=edit_live,
                 offline_post=offline_post,
@@ -1550,6 +1665,7 @@ class KickAlerts(commands.Cog):
         info: StreamInfo,
         settings: EmbedSettings,
         *,
+        events: EventSettings,
         auto_delete: bool,
         edit_live: bool,
         offline_post: str,
@@ -1561,6 +1677,10 @@ class KickAlerts(commands.Cog):
         state = {**STREAMER_DEFAULTS, **(entry or {})}
         was_live = bool(state.get("is_live"))
         previous_key = state.get("stream_key")
+        # The Discord event follows the stream state, never the alert message:
+        # it is stored per streamer, so a bot restart adopts a running stream
+        # instead of creating a second event.
+        await self._sync_event(guild, slug, info, state, events)
         channel = self._resolve_channel(guild, state.get("channel_id"), global_channel)
         if channel is None:
             log.debug(
@@ -1851,6 +1971,274 @@ class KickAlerts(commands.Cog):
                 return
             entry.update(values)
 
+    # -- Discord scheduled events ------------------------------------------- #
+    async def _sync_event(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        info: StreamInfo,
+        state: Dict[str, Any],
+        events: EventSettings,
+    ) -> str:
+        """Keep the guild's scheduled event in step with one stream.
+
+        Returns what happened: ``event-started``, ``event-kept``,
+        ``event-ended``, ``event-off``, ``event-none``,
+        ``event-no-permission`` or ``event-error``. A broken event never
+        touches the alerts.
+        """
+        try:
+            return await self._sync_event_inner(guild, slug, info, state, events)
+        except Exception:  # noqa: BLE001 - the poll must survive a broken event
+            log.exception("KickAlerts: event sync failed for %s", slug)
+            return "event-error"
+
+    async def _sync_event_inner(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        info: StreamInfo,
+        state: Dict[str, Any],
+        events: EventSettings,
+    ) -> str:
+        """The actual state machine behind :meth:`_sync_event`."""
+        wanted = (
+            events.enabled
+            and bool(state.get("events", True))
+            and not state.get("muted")
+        )
+        event = await self._stored_event(guild, slug, state)
+        if event is not None and event.status in (
+            discord.EventStatus.completed,
+            discord.EventStatus.canceled,
+        ):
+            # Discord closed it on its own (end time reached, or an admin did):
+            # it no longer represents the running stream.
+            event = None
+            await self._forget_event(guild, slug)
+        if not wanted:
+            if event is None:
+                return "event-none"
+            await self._finish_event(guild, slug, event, events)
+            return "event-off"
+        if info.is_live:
+            if event is not None and state.get("event_stream_key") == info.stream_key:
+                await self._extend_event(guild, slug, event, state, events)
+                return "event-kept"
+            if event is not None:
+                # The stream restarted between two polls: close the old card.
+                await self._finish_event(guild, slug, event, events)
+            return await self._start_event(guild, slug, info, events)
+        if event is not None:
+            await self._finish_event(guild, slug, event, events)
+            return "event-ended"
+        return "event-none"
+
+    async def _stored_event(
+        self, guild: discord.Guild, slug: str, state: Dict[str, Any]
+    ) -> Optional[discord.ScheduledEvent]:
+        """The event this cog created for a streamer, while it still exists."""
+        raw = state.get("event_id")
+        if not raw:
+            return None
+        try:
+            event_id = int(raw)
+        except (TypeError, ValueError):
+            await self._forget_event(guild, slug)
+            return None
+        event = guild.get_scheduled_event(event_id)
+        if event is not None:
+            return event
+        try:
+            return await guild.fetch_scheduled_event(event_id)
+        except discord.NotFound:
+            # Deleted by hand: stop pointing at it.
+            await self._forget_event(guild, slug)
+            return None
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.debug("KickAlerts: cannot fetch the event for %s: %s", slug, exc)
+            return None
+
+    async def _forget_event(self, guild: discord.Guild, slug: str) -> None:
+        """Drop the stored event id of one streamer."""
+        await self._store_state(
+            guild, slug, event_id=None, event_stream_key=None, event_end=None
+        )
+
+    async def _drop_event(
+        self, guild: discord.Guild, slug: str, entry: Optional[Mapping[str, Any]]
+    ) -> bool:
+        """Delete the event of a streamer that is being removed entirely."""
+        raw = (entry or {}).get("event_id")
+        if not raw:
+            return False
+        try:
+            event_id = int(raw)
+            event = guild.get_scheduled_event(event_id)
+            if event is None:
+                event = await guild.fetch_scheduled_event(event_id)
+            await event.delete(reason="KickAlerts: streamer removed")
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return False
+        except (TypeError, ValueError):
+            return False
+        log.info("KickAlerts: removed the Discord event of %s", slug)
+        return True
+
+    async def _start_event(
+        self, guild: discord.Guild, slug: str, info: StreamInfo, events: EventSettings
+    ) -> str:
+        """Create the guild event for a stream that is live right now."""
+        if not self._can_create_events(guild):
+            self._warn_missing_events_permission(guild, slug)
+            return "event-no-permission"
+        # An external event cannot start in the past, so it starts a minute
+        # from now and Discord flips it to ACTIVE at that moment.
+        start = datetime.now(timezone.utc) + timedelta(seconds=EVENT_START_DELAY)
+        end = start + timedelta(hours=events.hours)
+        try:
+            event = await guild.create_scheduled_event(
+                name=build_event_name(info, events.name),
+                description=build_event_description(info, events.description),
+                start_time=start,
+                end_time=end,
+                entity_type=discord.EntityType.external,
+                privacy_level=discord.PrivacyLevel.guild_only,
+                location=info.url[:EVENT_LOCATION_LIMIT],
+                reason=f"KickAlerts: {slug} is live",
+            )
+        except discord.Forbidden:
+            log.warning(
+                "KickAlerts: no permission to create a Discord event in guild %s "
+                "(needs Create Events)",
+                guild.id,
+            )
+            return "event-no-permission"
+        except discord.HTTPException as exc:
+            log.warning("KickAlerts: could not create the event for %s: %s", slug, exc)
+            return "event-error"
+        if events.cover:
+            await self._apply_cover(event, info, slug)
+        await self._store_state(
+            guild,
+            slug,
+            event_id=event.id,
+            event_stream_key=info.stream_key,
+            event_end=end.timestamp(),
+        )
+        log.info(
+            "KickAlerts: started the Discord event %s for %s in guild %s",
+            event.id,
+            slug,
+            guild.id,
+        )
+        return "event-started"
+
+    async def _apply_cover(
+        self, event: discord.ScheduledEvent, info: StreamInfo, slug: str
+    ) -> None:
+        """Use the stream thumbnail as the event cover, if it downloads."""
+        if not info.thumbnail:
+            return
+        image = await self.api.fetch_bytes(info.thumbnail)
+        if not image:
+            return
+        try:
+            await event.edit(image=image, reason="KickAlerts: stream thumbnail")
+        except (discord.Forbidden, discord.HTTPException):
+            # The cover is cosmetic; the event itself is already correct.
+            log.debug("KickAlerts: the cover image was rejected for %s", slug)
+
+    async def _finish_event(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        event: discord.ScheduledEvent,
+        events: EventSettings,
+    ) -> None:
+        """Take the event down when the stream is over."""
+        try:
+            if (
+                events.offline == "complete"
+                and event.status == discord.EventStatus.active
+            ):
+                await event.edit(
+                    status=discord.EventStatus.completed,
+                    end_time=datetime.now(timezone.utc),
+                    reason="KickAlerts: stream ended",
+                )
+            else:
+                # Nothing ran (or history is unwanted): remove it instead of
+                # leaving a canceled card behind.
+                await event.delete(reason="KickAlerts: stream ended")
+        except discord.NotFound:
+            pass
+        except discord.Forbidden:
+            log.warning(
+                "KickAlerts: no permission to remove event %s in guild %s",
+                event.id,
+                guild.id,
+            )
+        except discord.HTTPException as exc:
+            log.warning("KickAlerts: could not finish the event for %s: %s", slug, exc)
+        else:
+            log.info("KickAlerts: finished the Discord event for %s", slug)
+        await self._forget_event(guild, slug)
+
+    async def _extend_event(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        event: discord.ScheduledEvent,
+        state: Dict[str, Any],
+        events: EventSettings,
+    ) -> None:
+        """Push the end time out while a long stream is still running."""
+        if event.status != discord.EventStatus.active:
+            return
+        try:
+            end_ts = float(state.get("event_end") or 0)
+        except (TypeError, ValueError):
+            end_ts = 0.0
+        # Discord completes an external event at its end time, so a stream that
+        # runs longer would vanish from the Events tab mid-stream.
+        if end_ts and time.time() < end_ts - EVENT_EXTEND_BEFORE:
+            return
+        new_end = datetime.now(timezone.utc) + timedelta(hours=events.hours)
+        try:
+            await event.edit(
+                end_time=new_end, reason="KickAlerts: stream still running"
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.debug("KickAlerts: could not extend the event for %s: %s", slug, exc)
+            return
+        await self._store_state(guild, slug, event_end=new_end.timestamp())
+
+    def _can_create_events(self, guild: discord.Guild) -> bool:
+        """Whether the bot may create a guild scheduled event here."""
+        me = guild.me
+        if me is None and self.bot.user is not None:
+            me = guild.get_member(self.bot.user.id)
+        permissions = getattr(me, "guild_permissions", None)
+        if permissions is None:
+            return False
+        can_create = getattr(permissions, "create_events", None)
+        if can_create is None:  # discord.py too old to know the permission
+            can_create = permissions.manage_events
+        return bool(can_create)
+
+    def _warn_missing_events_permission(self, guild: discord.Guild, slug: str) -> None:
+        """Log a missing permission once per guild instead of every poll."""
+        if guild.id in self._event_permission_warned:
+            return
+        self._event_permission_warned.add(guild.id)
+        log.warning(
+            "KickAlerts: missing Create Events in guild %s - cannot create the "
+            "Discord event for %s",
+            guild.id,
+            slug,
+        )
+
     # -- command group ------------------------------------------------------ #
     @commands.guild_only()
     @commands.group(name="kickalert", aliases=["ka", "kickalerts"])
@@ -1987,7 +2375,10 @@ class KickAlerts(commands.Cog):
             if slug not in streamers:
                 await ctx.send(f"**{slug}** is not monitored.")
                 return
-            del streamers[slug]
+            entry = streamers.pop(slug)
+        # A removed streamer must not leave its Discord event behind.
+        async with ctx.typing():
+            await self._drop_event(ctx.guild, slug, entry)
         await ctx.send(f"✅ Removed **{slug}** from the alerts.")
 
     @kickalert.command(name="list")
@@ -2289,6 +2680,239 @@ class KickAlerts(commands.Cog):
         embed.set_footer(text="Kick.com | nothing was posted")
         await ctx.send(embed=embed)
 
+    @kickalert.command(name="events")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_events(self, ctx: commands.Context, state: bool) -> None:
+        """Create a Discord event while a monitored streamer is live.
+
+        The event carries the stream title, the category and the channel link,
+        so it shows up in the server's **Events** tab while the stream runs and
+        is removed when it ends. Needs the **Create Events** permission.
+        """
+        await self.config.guild(ctx.guild).events_enabled.set(state)
+        if not state:
+            await ctx.send(
+                "✅ Discord events are **off**. An event that is still up gets "
+                "removed on the next check."
+            )
+            return
+        lines = [
+            "✅ Discord events are **on**: every live stream of an enabled "
+            "streamer gets a scheduled event, and it disappears when the stream "
+            "ends."
+        ]
+        if not self._can_create_events(ctx.guild):
+            lines.append(
+                "⚠️ The bot is missing the **Create Events** permission in this "
+                "server, so nothing is created until it has that permission."
+            )
+        await ctx.send("\n\n".join(lines))
+
+    @kickalert.command(name="eventset")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventset(
+        self, ctx: commands.Context, username: str, state: bool
+    ) -> None:
+        """Turn the Discord event of one streamer on or off.
+
+        Only picks a streamer in or out of `[p]kickalert events true`.
+        """
+        slug = clean_slug(username) or username.strip().lower()
+        async with self.config.guild(ctx.guild).streamers() as streamers:
+            entry = streamers.get(slug)
+            if not isinstance(entry, dict):
+                await ctx.send(f"**{slug}** is not monitored.")
+                return
+            entry["events"] = state
+        await ctx.send(
+            f"✅ Discord events for **{slug}** are now "
+            f"**{'on' if state else 'off'}**."
+        )
+
+    @kickalert.command(name="eventhours")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventhours(self, ctx: commands.Context, hours: int) -> None:
+        """How long the event is scheduled for, in hours (1-12).
+
+        Discord completes an external event at its end time; a stream that runs
+        longer keeps pushing that time out, so this is the window on the card.
+        """
+        stamped = _clamp_event_hours(hours)
+        await self.config.guild(ctx.guild).event_hours.set(stamped)
+        note = (
+            ""
+            if stamped == hours
+            else f" (clamped into {MIN_EVENT_HOURS}-{MAX_EVENT_HOURS} h)"
+        )
+        await ctx.send(f"✅ Discord events are scheduled for **{stamped} h**{note}.")
+
+    @kickalert.command(name="eventname")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventname(self, ctx: commands.Context, *, template: str) -> None:
+        """Template for the event title; `reset` restores the default.
+
+        Placeholders: `{streamer}` `{title}` `{game}` `{category}` `{url}` —
+        the result is cut to Discord's 100 characters.
+        """
+        if template.strip().lower() in ("reset", "default"):
+            await self.config.guild(ctx.guild).event_name.set(None)
+            await ctx.send(f"✅ Event title reset to `{DEFAULT_EVENT_NAME}`.")
+            return
+        cleaned = " ".join(template.split())
+        if not cleaned:
+            await ctx.send("❌ The template is empty.")
+            return
+        await self.config.guild(ctx.guild).event_name.set(
+            cleaned[:EVENT_NAME_LIMIT]
+        )
+        await ctx.send(f"✅ Event titles now look like `{cleaned[:EVENT_NAME_LIMIT]}`.")
+
+    @kickalert.command(name="eventdescription", aliases=["eventdesc"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventdescription(
+        self, ctx: commands.Context, *, template: str
+    ) -> None:
+        """Template for the event description; `reset` goes back to automatic.
+
+        Automatic is the stream title followed by `category · channel link`.
+        """
+        if template.strip().lower() in ("reset", "default", "auto"):
+            await self.config.guild(ctx.guild).event_description.set(None)
+            await ctx.send("✅ Event descriptions are automatic again.")
+            return
+        cleaned = template.strip()
+        await self.config.guild(ctx.guild).event_description.set(
+            cleaned[:EVENT_DESCRIPTION_LIMIT]
+        )
+        await ctx.send(
+            "✅ Event descriptions are now:\n" + cleaned[:EVENT_DESCRIPTION_LIMIT]
+        )
+
+    @kickalert.command(name="eventcover")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventcover(self, ctx: commands.Context, state: bool) -> None:
+        """Use the stream thumbnail as the event's cover image."""
+        await self.config.guild(ctx.guild).event_cover.set(state)
+        await ctx.send(
+            f"✅ Event cover images are **{'on' if state else 'off'}**."
+        )
+
+    @kickalert.command(name="eventoffline")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventoffline(self, ctx: commands.Context, mode: str) -> None:
+        """What to do with the event when the stream ends: `delete` or `complete`.
+
+        `delete` leaves nothing behind, `complete` keeps the event as a finished
+        entry with its real end time.
+        """
+        choice = mode.strip().lower()
+        if choice not in EVENT_OFFLINE_MODES:
+            await ctx.send(
+                "❌ Pick `delete` or `complete`.\n"
+                "• `delete` — the event disappears when the stream ends\n"
+                "• `complete` — it stays in the server's past events"
+            )
+            return
+        await self.config.guild(ctx.guild).event_offline.set(choice)
+        text = (
+            "the event is deleted"
+            if choice == "delete"
+            else "the event is completed and stays in the past events"
+        )
+        await ctx.send(f"✅ When a stream ends, {text}.")
+
+    @kickalert.command(name="eventtest")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventtest(self, ctx: commands.Context, username: str) -> None:
+        """Create one event right now, to check the permission and the look.
+
+        Run it while the streamer is live — an event for an offline channel is
+        removed again at the next check.
+        """
+        slug = clean_slug(username) or username.strip().lower()
+        streamers = await self.config.guild(ctx.guild).streamers() or {}
+        if slug not in streamers:
+            await ctx.send(f"**{slug}** is not monitored — add it first.")
+            return
+        async with ctx.typing():
+            try:
+                info = await self.api.get_channel(slug)
+            except KickError as exc:
+                await ctx.send(f"❌ Kick API problem: {exc}")
+                return
+            if info is None:
+                await ctx.send(f"❌ No Kick channel called **{slug}**.")
+                return
+            data = await self.config.guild(ctx.guild).all()
+            events = EventSettings.from_guild_config(data)
+            state = {**STREAMER_DEFAULTS, **(streamers.get(slug) or {})}
+            existing = await self._stored_event(ctx.guild, slug, state)
+            if existing is not None and existing.status not in (
+                discord.EventStatus.completed,
+                discord.EventStatus.canceled,
+            ):
+                await ctx.send(
+                    f"ℹ️ **{slug}** already has an event "
+                    f"(`{existing.status.name}`): {existing.url}"
+                )
+                return
+            action = await self._start_event(ctx.guild, slug, info, events)
+            stored = (
+                (await self.config.guild(ctx.guild).streamers()) or {}
+            ).get(slug) or {}
+            event_id = stored.get("event_id")
+        if action != "event-started" or not event_id:
+            if action == "event-no-permission":
+                await ctx.send(
+                    "❌ The bot is missing **Create Events** in this server, so it "
+                    "cannot create a scheduled event."
+                )
+            else:
+                await ctx.send(
+                    f"❌ Could not create the event (`{action}`) — see the bot log."
+                )
+            return
+        event = ctx.guild.get_scheduled_event(int(event_id))
+        embed = discord.Embed(
+            colour=discord.Colour(KICK_COLOR),
+            title="Discord event created",
+            description=(
+                f"**{event.name if event else slug}**\n"
+                f"{event.url if event else ''}"
+            ),
+            timestamp=datetime.now(timezone.utc),
+        )
+        if event is not None:
+            embed.add_field(name="Status", value=event.status.name, inline=True)
+            embed.add_field(
+                name="Start", value=_stamp(event.start_time, "f") or "?", inline=True
+            )
+            embed.add_field(
+                name="End", value=_stamp(event.end_time, "f") or "?", inline=True
+            )
+        embed.set_footer(
+            text="An event for an offline streamer is removed at the next check."
+        )
+        await ctx.send(embed=embed)
+
+    @kickalert.command(name="eventclear", aliases=["eventdelete"])
+    @checks.admin_or_permissions(manage_guild=True)
+    async def kickalert_eventclear(self, ctx: commands.Context, username: str) -> None:
+        """Delete the Discord event this cog created for a streamer."""
+        slug = clean_slug(username) or username.strip().lower()
+        streamers = await self.config.guild(ctx.guild).streamers() or {}
+        entry = streamers.get(slug)
+        if not isinstance(entry, dict):
+            await ctx.send(f"**{slug}** is not monitored.")
+            return
+        async with ctx.typing():
+            removed = await self._drop_event(ctx.guild, slug, entry)
+            await self._forget_event(ctx.guild, slug)
+        if removed:
+            await ctx.send(f"✅ The Discord event of **{slug}** is gone.")
+        else:
+            await ctx.send(f"ℹ️ **{slug}** has no event stored.")
+
     @kickalert.command(name="style")
     @checks.admin_or_permissions(manage_guild=True)
     async def kickalert_style(self, ctx: commands.Context, style: str) -> None:
@@ -2498,6 +3122,16 @@ class KickAlerts(commands.Cog):
                 ),
                 inline=True,
             )
+        if data.get("events_enabled"):
+            events_value = (
+                f"{_clamp_event_hours(data.get('event_hours'))} h · "
+                f"{str(data.get('event_offline') or 'delete')}"
+            )
+            if not self._can_create_events(ctx.guild):
+                events_value += " · **no Create Events**"
+        else:
+            events_value = "off"
+        embed.add_field(name="Events", value=events_value, inline=True)
         embed.add_field(
             name="Style", value=str(data.get("embed_style", "detailed")), inline=True
         )
@@ -2580,6 +3214,11 @@ class KickAlerts(commands.Cog):
                 f"`{ctx.clean_prefix}kickalert clear True` to confirm."
             )
             return
+        streamers = await self.config.guild(ctx.guild).streamers() or {}
+        async with ctx.typing():
+            for slug, entry in streamers.items():
+                if isinstance(entry, dict):
+                    await self._drop_event(ctx.guild, slug, entry)
         await self.config.guild(ctx.guild).clear()
         await ctx.send("✅ All KickAlerts settings and streamers were cleared.")
 
