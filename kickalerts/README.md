@@ -72,8 +72,10 @@ live, so members see the stream without reading a channel.
 - It is created on go-live and **deleted when the stream ends** — an offline
   streamer leaves nothing behind. `[p]kickalert eventoffline complete` keeps it
   as a finished entry in the past events instead.
-- Discord refuses a start time in the past, so the event starts **one minute**
-  after the bot noticed the stream and turns *Active* on its own at that moment.
+- Discord refuses a start time in the past, so the event is created with a start
+  one minute ahead and then **started immediately** (status `ACTIVE`) — the card
+  says "live", not "starting soon". If that call fails, Discord flips it on its
+  own after that minute, and the next check retries it.
 - `[p]kickalert eventhours <1-12>` (default 8) is the nominal length. Discord
   completes an external event at its end time, so a stream that runs longer
   pushes that time out on its own — a 12 hour stream never vanishes mid-stream.

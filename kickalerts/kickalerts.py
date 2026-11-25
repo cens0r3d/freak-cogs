@@ -87,8 +87,11 @@ TEMPLATE_FIELDS = (
 #: Default name of the Discord scheduled event. It takes the same placeholders
 #: as a custom alert message, so a guild can localise it with one command.
 DEFAULT_EVENT_NAME = "{streamer} is live on Kick"
-#: Discord refuses an external event that starts in the past, so go-live is
-#: rounded up to the next minute; the event turns ACTIVE at that moment.
+#: Discord refuses an external event that starts in the past, so creation uses
+#: a start time one minute ahead. The status is then switched to ACTIVE by hand
+#: (``Modify Guild Scheduled Event``), so the card says "live" immediately
+#: instead of "starting soon"; without that call Discord flips it by itself at
+#: this moment anyway.
 EVENT_START_DELAY = 60
 #: Nominal length in hours. The API completes an external event at its end time,
 #: so a running stream extends it (see ``EVENT_EXTEND_BEFORE``).
@@ -2023,6 +2026,10 @@ class KickAlerts(commands.Cog):
             return "event-off"
         if info.is_live:
             if event is not None and state.get("event_stream_key") == info.stream_key:
+                # A freshly created event is still SCHEDULED for a minute; start
+                # it now so the card does not read "starting soon" while the
+                # stream is already running.
+                event = await self._activate_event(guild, slug, event) or event
                 await self._extend_event(guild, slug, event, state, events)
                 return "event-kept"
             if event is not None:
@@ -2085,6 +2092,29 @@ class KickAlerts(commands.Cog):
         log.info("KickAlerts: removed the Discord event of %s", slug)
         return True
 
+    async def _activate_event(
+        self, guild: discord.Guild, slug: str, event: discord.ScheduledEvent
+    ) -> Optional[discord.ScheduledEvent]:
+        """Start a scheduled event now instead of at its start time.
+
+        ``Modify Guild Scheduled Event`` is the documented way to start an event
+        (the ``status`` field), so the card reads "live" instead of "starting
+        soon". Discord would flip it by itself one minute later anyway, so a
+        failure here costs that minute and nothing else.
+
+        Returns the updated event, or ``None`` when nothing changed.
+        """
+        if event.status != discord.EventStatus.scheduled:
+            return None
+        try:
+            return await event.edit(
+                status=discord.EventStatus.active,
+                reason="KickAlerts: the stream is live",
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.debug("KickAlerts: could not start the event for %s: %s", slug, exc)
+            return None
+
     async def _start_event(
         self, guild: discord.Guild, slug: str, info: StreamInfo, events: EventSettings
     ) -> str:
@@ -2117,6 +2147,9 @@ class KickAlerts(commands.Cog):
         except discord.HTTPException as exc:
             log.warning("KickAlerts: could not create the event for %s: %s", slug, exc)
             return "event-error"
+        # Start it right away: the API refuses a start time in the past, so the
+        # card would otherwise read "starting soon" for a minute.
+        event = await self._activate_event(guild, slug, event) or event
         if events.cover:
             await self._apply_cover(event, info, slug)
         await self._store_state(
