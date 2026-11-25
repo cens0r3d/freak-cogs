@@ -1,8 +1,8 @@
 # fakemessage
 
 Turns a member and a sentence into a screenshot of another app: Discord,
-WhatsApp, Telegram, X, Twitch chat or Kick chat. Real avatar, real role colour,
-the platform's own bubble and its own markdown.
+WhatsApp, Telegram, X, Facebook, Reddit, Twitch chat or Kick chat. Real avatar,
+real role colour, the platform's own bubble and its own markdown.
 
 ```
 /fakemessage service:whatsapp message:*nein* hab ich nicht geschrieben member:@someone outgoing:true
@@ -30,6 +30,8 @@ Five pictures per minute per user, 2000 characters per message.
 | `x` | Post: handle, blue check, meta line, engagement row. | `member`, `name`, `handle`, `verified`, `timestamp` |
 | `twitch` | Chat line(s) with badge and coloured name. | `member`, `name`, `colour`, `badge` |
 | `kick` | Chat line(s) with badge, brand-green name. | `member`, `name`, `colour`, `badge` |
+| `facebook` | Post: header with globe and menu, reaction bubbles, Like/Comment/Share bar. | `member`, `name`, `timestamp` |
+| `reddit` | Comment: thread rail, u/name, vote pill with arrows, Reply/Share/Save. | `member`, `name`, `timestamp` |
 
 `colour` is `#rrggbb`, `badge` is none/mod/sub/vip/founder, and every line break
 becomes another chat line on Twitch and Kick.
@@ -63,5 +65,5 @@ requests and an offline bot still draws what it has seen.
 
 ## Ideas for later
 
-Instagram DM, iMessage, Reddit comment, YouTube live chat, Steam chat - each is
-one renderer in `cards.py` plus one `service` entry.
+Instagram DM, iMessage, YouTube live chat, Steam chat, Discord thread reply -
+each is one renderer in `cards.py` plus one `service` entry.

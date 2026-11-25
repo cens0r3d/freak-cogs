@@ -17,7 +17,7 @@ import functools
 import io
 import logging
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 import aiohttp
 import discord
@@ -46,6 +46,10 @@ SERVICES = {
     "tw": "x",
     "twitch": "twitch",
     "kick": "kick",
+    "facebook": "facebook",
+    "fb": "facebook",
+    "reddit": "reddit",
+    "rd": "reddit",
 }
 
 
@@ -133,8 +137,10 @@ class FakeMessage(commands.Cog):
 
 
     # -- other platforms -------------------------------------------------
-    async def _emoji_images(self, text: str) -> Dict[str, Any]:
-        clusters = sorted({match.group(0) for match in render.UNICODE_EMOJI_RE.finditer(text)})
+    async def _emoji_images(self, text: str, extra: Sequence[str] = ()) -> Dict[str, Any]:
+        clusters = sorted(
+            {match.group(0) for match in render.UNICODE_EMOJI_RE.finditer(text)} | set(extra)
+        )
         if not clusters:
             return {}
         return await self.emoji_cache.load_unicode(self.session, clusters)
@@ -146,11 +152,12 @@ class FakeMessage(commands.Cog):
         member: Optional[discord.Member],
         name: Optional[str],
         message: str,
+        extra_emoji: Sequence[str] = (),
         **kwargs,
     ) -> bytes:
         shown = (name or (member.display_name if member else "")).strip() or "someone"
         avatar = await self._avatar(member) if member is not None else None
-        images = await self._emoji_images(message)
+        images = await self._emoji_images(message, extra_emoji)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
@@ -274,6 +281,38 @@ class FakeMessage(commands.Cog):
             badges=BADGES.get((badge or "none").lower(), ()),
         )
 
+
+    async def _facebook(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.facebook,
+            member=member,
+            name=name,
+            message=message,
+            time=(time or "").strip() or "Just now",
+            extra_emoji=("\U0001F44D", "\u2764\ufe0f"),
+        )
+
+    async def _reddit(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.reddit,
+            member=member,
+            name=name,
+            message=message,
+            time=(time or "").strip() or "5h ago",
+        )
+
     async def _dispatch(
         self,
         member: Optional[discord.Member] = None,
@@ -301,6 +340,10 @@ class FakeMessage(commands.Cog):
             return await self._tweet(
                 member, name, message, handle=handle, verified=verified, time=timestamp
             )
+        if service == "facebook":
+            return await self._facebook(member, name, message, time=timestamp)
+        if service == "reddit":
+            return await self._reddit(member, name, message, time=timestamp)
         return await self._chat(
             member, name, message, platform=service, colour=colour, badge=badge
         )
@@ -376,7 +419,7 @@ class FakeMessage(commands.Cog):
         message="What the message says - line breaks become chat lines on Twitch and Kick",
         member="Whose avatar and name appear (required for the discord card)",
         name="Show a different name than the member's",
-        timestamp="Time in the bubble, next to the name, or instead of 'Today at ...'",
+        timestamp="Time in the bubble, next to the name, or instead of 'Today at ...' / 'Just now' / '5h ago'",
         outgoing="WhatsApp/Telegram: green or blue bubble on the right, with ticks",
         handle="X: handle without the @",
         verified="X: show the blue check",
@@ -391,6 +434,8 @@ class FakeMessage(commands.Cog):
             app_commands.Choice(name="x", value="x"),
             app_commands.Choice(name="twitch", value="twitch"),
             app_commands.Choice(name="kick", value="kick"),
+            app_commands.Choice(name="facebook", value="facebook"),
+            app_commands.Choice(name="reddit", value="reddit"),
         ],
         badge=[
             app_commands.Choice(name="none", value="none"),

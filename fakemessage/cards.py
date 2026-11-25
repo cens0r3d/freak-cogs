@@ -791,3 +791,324 @@ def chat(
         rich.draw(canvas, x + name_w, y, text_colour)
         y += row
     return _png(canvas, device_w, height)
+
+# -- Facebook ------------------------------------------------------------
+
+FB_BG = (36, 37, 38)
+FB_TEXT = (228, 230, 235)
+FB_MUTED = (176, 179, 184)
+FB_LINE = (62, 64, 66)
+FB_BLUE = (24, 119, 242)
+
+
+def _emoji_pic(images, cluster: str, size: int) -> Optional[Image.Image]:
+    supplied = (images or {}).get(cluster)
+    tile = _fit_emoji(supplied) or _emoji_tile(cluster)
+    if tile is None:
+        return None
+    return tile.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def _thumb(draw: ImageDraw.ImageDraw, x: float, y: float, size: float, fill) -> None:
+    """A tiny thumbs-up: palm, thumb and a wrist, readable at 16 px."""
+    unit = size / 16
+    draw.rounded_rectangle(
+        (x + 1 * unit, y + 7 * unit, x + 9 * unit, y + 15 * unit),
+        radius=2 * unit,
+        fill=fill,
+    )
+    draw.rounded_rectangle(
+        (x + 3 * unit, y + 2 * unit, x + 7 * unit, y + 8 * unit),
+        radius=2 * unit,
+        fill=fill,
+    )
+    draw.rounded_rectangle(
+        (x + 9 * unit, y + 8 * unit, x + 15 * unit, y + 15 * unit),
+        radius=2 * unit,
+        fill=fill,
+    )
+
+
+def _heart(draw: ImageDraw.ImageDraw, x: float, y: float, size: float, fill) -> None:
+    unit = size / 16
+    draw.ellipse((x + 1 * unit, y + 2 * unit, x + 8 * unit, y + 9 * unit), fill=fill)
+    draw.ellipse((x + 8 * unit, y + 2 * unit, x + 15 * unit, y + 9 * unit), fill=fill)
+    draw.polygon(
+        [(x + 1.5 * unit, y + 7 * unit), (x + 14.5 * unit, y + 7 * unit), (x + 8 * unit, y + 15 * unit)],
+        fill=fill,
+    )
+
+
+def _fb_icon(draw: ImageDraw.ImageDraw, kind: str, x: float, y: float, unit: float, fill) -> None:
+    width = max(1, int(unit * 0.11))
+    if kind == "like":
+        draw.rounded_rectangle(
+            (x + unit * 0.08, y + unit * 0.55, x + unit * 0.62, y + unit),
+            radius=unit * 0.12,
+            outline=fill,
+            width=width,
+        )
+        draw.rounded_rectangle(
+            (x + unit * 0.22, y + unit * 0.12, x + unit * 0.48, y + unit * 0.62),
+            radius=unit * 0.12,
+            outline=fill,
+            width=width,
+        )
+    elif kind == "comment":
+        draw.rounded_rectangle(
+            (x + unit * 0.05, y + unit * 0.12, x + unit * 0.95, y + unit * 0.78),
+            radius=unit * 0.22,
+            outline=fill,
+            width=width,
+        )
+        draw.polygon(
+            [
+                (x + unit * 0.28, y + unit * 0.76),
+                (x + unit * 0.28, y + unit),
+                (x + unit * 0.52, y + unit * 0.76),
+            ],
+            fill=fill,
+        )
+    elif kind == "share":
+        draw.line(
+            (x + unit * 0.08, y + unit * 0.92, x + unit * 0.55, y + unit * 0.92),
+            fill=fill,
+            width=width,
+        )
+        draw.line(
+            (x + unit * 0.55, y + unit * 0.92, x + unit * 0.55, y + unit * 0.28),
+            fill=fill,
+            width=width,
+        )
+        draw.line(
+            (x + unit * 0.55, y + unit * 0.28, x + unit * 0.30, y + unit * 0.52),
+            fill=fill,
+            width=width,
+        )
+        draw.line(
+            (x + unit * 0.55, y + unit * 0.28, x + unit * 0.80, y + unit * 0.52),
+            fill=fill,
+            width=width,
+        )
+
+
+def facebook(
+    *,
+    name: str,
+    message: str,
+    time: str = "Just now",
+    avatar: Optional[bytes] = None,
+    privacy: str = "Public",
+    reactions: str = "1.4K",
+    comments: str = "86",
+    shares: str = "12",
+    images: Optional[Dict[str, Image.Image]] = None,
+) -> bytes:
+    """One Facebook post: header, text, reaction bubbles and the action bar."""
+    width = 500 * SCALE
+    pad = 16 * SCALE
+    gutter = 68 * SCALE
+    text_limit = width - gutter - pad
+
+    body = Rich(message, 15, markers=MARKERS["chat"], images=images, line_height=20)
+    body.wrap(text_limit)
+
+    header_y = pad
+    text_y = header_y + 58 * SCALE
+    react_y = text_y + body.height + 12 * SCALE
+    divider_y = react_y + 28 * SCALE
+    height = divider_y + 44 * SCALE
+
+    canvas = Image.new("RGB", (width, height), FB_BG)
+    draw = ImageDraw.Draw(canvas)
+
+    size = 40 * SCALE
+    tile = _avatar(avatar, name, size, FB_BLUE)
+    canvas.paste(tile, (pad, header_y), tile)
+
+    name_font = _font(int(15 * SCALE), bold=True)
+    draw.text((gutter, header_y + 18 * SCALE), name, font=name_font, fill=FB_TEXT, anchor="ls")
+    meta_font = _font(int(12 * SCALE))
+    meta = "{} · ".format(time)
+    draw.text((gutter, header_y + 38 * SCALE), meta, font=meta_font, fill=FB_MUTED, anchor="ls")
+    globe_x = gutter + int(meta_font.getlength(meta)) + 2 * SCALE
+    globe_y = header_y + 38 * SCALE
+    radius = 5 * SCALE
+    draw.ellipse(
+        (globe_x, globe_y - radius * 2, globe_x + radius * 2, globe_y),
+        outline=FB_MUTED,
+        width=max(1, SCALE),
+    )
+    draw.ellipse(
+        (globe_x + radius * 0.35, globe_y - radius * 2, globe_x + radius * 1.65, globe_y),
+        outline=FB_MUTED,
+        width=max(1, SCALE),
+    )
+    draw.line(
+        (globe_x, globe_y - radius, globe_x + radius * 2, globe_y - radius),
+        fill=FB_MUTED,
+        width=SCALE,
+    )
+    draw.text((globe_x + radius * 2 + 6 * SCALE, globe_y), privacy, font=meta_font, fill=FB_MUTED, anchor="ls")
+
+    # overflow menu
+    for index in range(3):
+        cx = width - pad - 8 * SCALE
+        cy = header_y + 10 * SCALE + index * 5 * SCALE
+        draw.ellipse((cx, cy, cx + 3 * SCALE, cy + 3 * SCALE), fill=FB_MUTED)
+
+    body.draw(canvas, gutter, text_y, FB_TEXT, link_colour=(69, 155, 240))
+
+    # reaction bubbles: like in blue, love in red, overlapping
+    bubble = 18 * SCALE
+    x = gutter
+    for kind, colour in (("like", FB_BLUE), ("heart", (244, 51, 74))):
+        draw.ellipse((x, react_y, x + bubble, react_y + bubble), fill=colour)
+        if kind == "like":
+            _thumb(draw, x + bubble * 0.18, react_y + bubble * 0.16, bubble * 0.64, (255, 255, 255))
+        else:
+            _heart(draw, x + bubble * 0.18, react_y + bubble * 0.16, bubble * 0.64, (255, 255, 255))
+        x += bubble - 4 * SCALE
+    draw.text(
+        (x + 6 * SCALE, react_y + bubble - 3 * SCALE),
+        reactions,
+        font=_font(int(13 * SCALE)),
+        fill=FB_MUTED,
+        anchor="ls",
+    )
+    draw.text(
+        (width - pad, react_y + bubble - 3 * SCALE),
+        "{} comments · {} shares".format(comments, shares),
+        font=_font(int(13 * SCALE)),
+        fill=FB_MUTED,
+        anchor="rs",
+    )
+
+    draw.line((pad, divider_y, width - pad, divider_y), fill=FB_LINE, width=SCALE)
+
+    labels = (("like", "Like"), ("comment", "Comment"), ("share", "Share"))
+    step = (width - pad * 2) / len(labels)
+    bar_font = _font(int(14 * SCALE), bold=True)
+    unit = 16 * SCALE
+    for index, (kind, label) in enumerate(labels):
+        centre = pad + step * index + step / 2
+        label_w = bar_font.getlength(label)
+        group = unit + 6 * SCALE + label_w
+        start = centre - group / 2
+        _fb_icon(draw, kind, start, divider_y + 14 * SCALE, unit, FB_MUTED)
+        draw.text(
+            (start + unit + 6 * SCALE, divider_y + 30 * SCALE),
+            label,
+            font=bar_font,
+            fill=FB_MUTED,
+            anchor="ls",
+        )
+    return _png(canvas, width, height)
+
+
+# -- Reddit --------------------------------------------------------------
+
+RD_BG = (26, 26, 27)
+RD_TEXT = (215, 218, 220)
+RD_MUTED = (129, 131, 132)
+RD_PILL = (39, 39, 41)
+RD_LINE = (73, 74, 76)
+
+
+def reddit(
+    *,
+    name: str,
+    message: str,
+    time: str = "5h ago",
+    avatar: Optional[bytes] = None,
+    score: str = "1.2k",
+    images: Optional[Dict[str, Image.Image]] = None,
+) -> bytes:
+    """One Reddit comment: thread rail, u/name, text, vote pill and actions."""
+    width = 480 * SCALE
+    pad = 16 * SCALE
+    rail_x = pad + 8 * SCALE
+    gutter = rail_x + 22 * SCALE
+    text_limit = width - gutter - pad
+
+    body = Rich(message, 14, markers=MARKERS["chat"], images=images, line_height=19)
+    body.wrap(text_limit)
+
+    header_y = pad
+    text_y = header_y + 30 * SCALE
+    actions_y = text_y + body.height + 12 * SCALE
+    height = actions_y + 26 * SCALE + pad
+
+    canvas = Image.new("RGB", (width, height), RD_BG)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.line((rail_x, 0, rail_x, height), fill=RD_LINE, width=SCALE)
+
+    size = 24 * SCALE
+    tile = _avatar(avatar, name, size, (255, 69, 0))
+    canvas.paste(tile, (gutter, header_y), tile)
+
+    handle = "u/" + name.strip().lstrip("u/")
+    name_font = _font(int(12 * SCALE), bold=True)
+    draw.text((gutter + size + 8 * SCALE, header_y + 20 * SCALE), handle, font=name_font, fill=RD_TEXT, anchor="ls")
+    x = gutter + size + 8 * SCALE + int(name_font.getlength(handle)) + 6 * SCALE
+    draw.text(
+        (x, header_y + 20 * SCALE),
+        "· {}".format(time),
+        font=_font(int(12 * SCALE)),
+        fill=RD_MUTED,
+        anchor="ls",
+    )
+
+    body.draw(canvas, gutter, text_y, RD_TEXT, link_colour=(69, 155, 240))
+
+    # vote pill: measure the contents, draw the pill, then the contents on top
+    score_font = _font(int(12 * SCALE), bold=True)
+    arrow_w = 9 * SCALE
+    gap = 6 * SCALE
+    score_w = int(score_font.getlength(score))
+    pill_h = 24 * SCALE
+    inner = arrow_w + gap + score_w + gap + arrow_w
+    pill_w = inner + 16 * SCALE
+    pill_x = gutter - 8 * SCALE
+    pill_y = actions_y
+
+    draw.rounded_rectangle(
+        (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
+        radius=pill_h / 2,
+        fill=RD_PILL,
+        outline=RD_LINE,
+        width=SCALE,
+    )
+
+    def arrow(cx: float, up: bool, colour) -> None:
+        if up:
+            draw.polygon(
+                [(cx, pill_y + 5 * SCALE), (cx - arrow_w / 2, pill_y + 11 * SCALE), (cx + arrow_w / 2, pill_y + 11 * SCALE)],
+                fill=colour,
+            )
+            draw.line((cx, pill_y + 10 * SCALE, cx, pill_y + 17 * SCALE), fill=colour, width=max(1, SCALE))
+        else:
+            draw.polygon(
+                [(cx, pill_y + 19 * SCALE), (cx - arrow_w / 2, pill_y + 13 * SCALE), (cx + arrow_w / 2, pill_y + 13 * SCALE)],
+                fill=colour,
+            )
+            draw.line((cx, pill_y + 7 * SCALE, cx, pill_y + 14 * SCALE), fill=colour, width=max(1, SCALE))
+
+    cursor = pill_x + 8 * SCALE + arrow_w / 2
+    arrow(cursor, True, RD_MUTED)
+    cursor += arrow_w / 2 + gap
+    draw.text((cursor, pill_y + 16 * SCALE), score, font=score_font, fill=RD_TEXT, anchor="ls")
+    cursor += score_w + gap + arrow_w / 2
+    arrow(cursor, False, RD_MUTED)
+
+    action_font = _font(int(12 * SCALE), bold=True)
+    x = pill_x + pill_w + 14 * SCALE
+    for label in ("Reply", "Share", "Save"):
+        draw.text((x, pill_y + 16 * SCALE), label, font=action_font, fill=RD_MUTED, anchor="ls")
+        x += int(action_font.getlength(label)) + 14 * SCALE
+    for index in range(3):
+        cx = x + index * 5 * SCALE
+        cy = pill_y + 12 * SCALE
+        draw.ellipse((cx, cy, cx + 3 * SCALE, cy + 3 * SCALE), fill=RD_MUTED)
+    return _png(canvas, width, height)
