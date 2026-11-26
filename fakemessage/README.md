@@ -1,8 +1,8 @@
 # fakemessage
 
 Turns a member and a sentence into a screenshot of another app: Discord,
-WhatsApp, Telegram, Instagram, Snapchat, X, Facebook, Reddit, Twitch chat or
-Kick chat. Real avatar, real role colour, the platform's own bubble, its own
+WhatsApp, Telegram, Instagram, Snapchat, iMessage, YouTube, X, Facebook, Reddit,
+Twitch chat or Kick chat. Real avatar, real role colour, the platform's own bubble, its own
 markdown, and optionally an attached picture.
 
 ```
@@ -35,6 +35,8 @@ Five pictures per minute per user, 2000 characters per message.
 | `reddit` | Comment: thread rail, u/name, vote pill with arrows, Reply/Share/Save. | `member`, `name`, `timestamp` |
 | `instagram` | DM: blue outgoing bubble, media bubble on its own, time under the bubble. | `member`, `name`, `timestamp`, `outgoing` |
 | `snapchat` | Chat: blue outgoing bubble with "Opened · time" underneath. | `member`, `name`, `timestamp`, `outgoing` |
+| `imessage` | Thread: blue outgoing bubble, "Read 21:07" underneath. | `member`, `name`, `timestamp`, `outgoing` |
+| `youtube` | Comment under a video: thumbnail, title, @name, like/dislike, Reply, replies. | `member`, `name`, `timestamp` |
 
 `colour` is `#rrggbb`, `badge` is none/mod/sub/vip/founder, and every line break
 becomes another chat line on Twitch and Kick.
@@ -42,8 +44,8 @@ becomes another chat line on Twitch and Kick.
 A picture goes in through `image:` (slash) or simply as an attachment on the
 prefix command. It lands where each app puts it: flush inside the WhatsApp or
 Telegram bubble, its own bubble above the text on Instagram and Snapchat, below
-the text on X, Facebook, Reddit and Discord. Twitch and Kick have no pictures
-and ignore it. Limit 8 MB, image types only.
+the text on X, Facebook, Reddit and Discord. Twitch, Kick and YouTube have no
+pictures there and ignore it. Limit 8 MB, image types only.
 
 ## Markdown, per platform
 

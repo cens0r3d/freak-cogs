@@ -57,6 +57,11 @@ SERVICES = {
     "snapchat": "snapchat",
     "sc": "snapchat",
     "snap": "snapchat",
+    "imessage": "imessage",
+    "im": "imessage",
+    "imsg": "imessage",
+    "youtube": "youtube",
+    "yt": "youtube",
 }
 
 
@@ -392,6 +397,42 @@ class FakeMessage(commands.Cog):
             image=image,
         )
 
+    async def _imessage(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+        outgoing: bool = False,
+        image: Optional[bytes] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.imessage,
+            member=member,
+            name=name,
+            message=message,
+            time=self._stamp(time),
+            outgoing=outgoing,
+            image=image,
+        )
+
+    async def _youtube(
+        self,
+        member: Optional[discord.Member],
+        name: Optional[str],
+        message: str,
+        time: Optional[str] = None,
+        image: Optional[bytes] = None,
+    ) -> bytes:
+        return await self._card(
+            cards.youtube,
+            member=member,
+            name=name,
+            message=message,
+            time=(time or "").strip() or "1 day ago",
+            image=image,
+        )
+
     async def _dispatch(
         self,
         member: Optional[discord.Member] = None,
@@ -444,6 +485,12 @@ class FakeMessage(commands.Cog):
             return await self._snapchat(
                 member, name, message, time=timestamp, outgoing=outgoing, image=image
             )
+        if service == "imessage":
+            return await self._imessage(
+                member, name, message, time=timestamp, outgoing=outgoing, image=image
+            )
+        if service == "youtube":
+            return await self._youtube(member, name, message, time=timestamp, image=image)
         return await self._chat(
             member, name, message, platform=service, colour=colour, badge=badge
         )
@@ -547,6 +594,8 @@ class FakeMessage(commands.Cog):
             app_commands.Choice(name="reddit", value="reddit"),
             app_commands.Choice(name="instagram", value="instagram"),
             app_commands.Choice(name="snapchat", value="snapchat"),
+            app_commands.Choice(name="imessage", value="imessage"),
+            app_commands.Choice(name="youtube", value="youtube"),
         ],
         badge=[
             app_commands.Choice(name="none", value="none"),

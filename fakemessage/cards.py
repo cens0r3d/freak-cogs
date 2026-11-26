@@ -1269,7 +1269,14 @@ def _messenger(
     photo_top = top
     text_top = top + (photo_h + gap if photo is not None else 0)
     time_font = _font(int(10 * SCALE))
-    stamp = ("Opened · " + time) if mark == "opened" else time
+    if mark == "opened":
+        stamp = "Opened · " + time
+    elif mark == "read":
+        stamp = "Read " + time
+    elif mark == "delivered":
+        stamp = "Delivered"
+    else:
+        stamp = time
     stamp_y = text_top + text_h + 5 * SCALE
     height = stamp_y + 14 * SCALE + 12 * SCALE
 
@@ -1423,3 +1430,184 @@ def snapchat(
         images=images,
         image=image,
     )
+
+def imessage(
+    *,
+    name: str,
+    message: str,
+    time: str = "21:07",
+    outgoing: bool = False,
+    avatar: Optional[bytes] = None,
+    images: Optional[Dict[str, Image.Image]] = None,
+    image: Optional[bytes] = None,
+) -> bytes:
+    """An iMessage thread, dark mode: blue outgoing bubble, Read under it."""
+    return _messenger(
+        name=name,
+        message=message,
+        time=time,
+        outgoing=outgoing,
+        avatar=avatar,
+        status="iMessage",
+        bg=(0, 0, 0),
+        header_bg=(28, 28, 30),
+        bubble_in=(38, 38, 42),
+        bubble_out=(11, 147, 246),
+        text_colour=(255, 255, 255),
+        muted=(142, 142, 147),
+        radius=18,
+        accent=(11, 147, 246),
+        mark="read" if outgoing else None,
+        images=images,
+        image=image,
+    )
+
+
+def _thumb_icon(draw: ImageDraw.ImageDraw, x: float, y: float, size: float, colour, up: bool = True):
+    """A small outlined thumb, as YouTube draws it under a comment."""
+    flip = 1 if up else -1
+    mid = y + size / 2
+    draw.rounded_rectangle(
+        (x, mid - size * 0.12, x + size * 0.28, mid + size * 0.44),
+        radius=2 * SCALE,
+        outline=colour,
+        width=int(1.6 * SCALE),
+    )
+    draw.polygon(
+        [
+            (x + size * 0.32, mid + size * 0.42 * flip),
+            (x + size * 0.86, mid + size * 0.42 * flip),
+            (x + size * 0.86, mid - size * 0.06 * flip),
+            (x + size * 0.60, mid - size * 0.48 * flip),
+            (x + size * 0.34, mid - size * 0.12 * flip),
+        ],
+        outline=colour,
+        width=int(1.6 * SCALE),
+    )
+
+
+def youtube(
+    *,
+    name: str,
+    message: str,
+    time: str = "1 day ago",
+    avatar: Optional[bytes] = None,
+    likes: str = "1.2K",
+    replies: str = "34",
+    video: str = "Neues Video",
+    channel: str = "",
+    views: str = "412K views · 2 days ago",
+    hearted: bool = False,
+    pinned: bool = False,
+    images: Optional[Dict[str, Image.Image]] = None,
+    image: Optional[bytes] = None,
+) -> bytes:
+    """A YouTube comment under a video, dark mode."""
+    channel = channel or name.lstrip("@")
+    width = 520 * SCALE
+    pad = 16 * SCALE
+
+    body = Rich(message, 14, markers=MARKERS["chat"], images=images, line_height=20)
+    body.wrap(width - pad * 2 - 56 * SCALE)
+
+    top = pad
+    thumb_w = 96 * SCALE
+    thumb_h = 54 * SCALE
+    title_y = top + 4 * SCALE
+
+    comment_top = top + thumb_h + 18 * SCALE
+    text_y = comment_top + 26 * SCALE
+    action_y = text_y + body.height + 10 * SCALE
+    height = action_y + 20 * SCALE + pad
+
+    canvas = Image.new("RGB", (width, height), (15, 15, 15))
+    draw = ImageDraw.Draw(canvas)
+
+    # the video header above the comment, so the card reads as YouTube
+    draw.rounded_rectangle(
+        (pad, top, pad + thumb_w, top + thumb_h), radius=6 * SCALE, fill=(40, 40, 40)
+    )
+    draw.polygon(
+        [
+            (pad + thumb_w / 2 - 6 * SCALE, top + thumb_h / 2 - 9 * SCALE),
+            (pad + thumb_w / 2 + 9 * SCALE, top + thumb_h / 2),
+            (pad + thumb_w / 2 - 6 * SCALE, top + thumb_h / 2 + 9 * SCALE),
+        ],
+        fill=(230, 230, 230),
+    )
+    draw.text(
+        (pad + thumb_w + 16 * SCALE, title_y + 10 * SCALE),
+        video,
+        font=_font(int(14 * SCALE), bold=True),
+        fill=(241, 241, 241),
+        anchor="ls",
+    )
+    draw.text(
+        (pad + thumb_w + 16 * SCALE, title_y + 30 * SCALE),
+        f"{channel} · {views}",
+        font=_font(int(12 * SCALE)),
+        fill=(170, 170, 170),
+        anchor="ls",
+    )
+    draw.line((pad, top + thumb_h + 8 * SCALE, width - pad, top + thumb_h + 8 * SCALE), fill=(48, 48, 48), width=SCALE)
+
+    if pinned:
+        draw.text(
+            (pad, comment_top - 8 * SCALE),
+            f"Pinned by {channel}",
+            font=_font(int(11 * SCALE)),
+            fill=(170, 170, 170),
+            anchor="ls",
+        )
+        comment_top += 14 * SCALE
+        text_y += 14 * SCALE
+        action_y += 14 * SCALE
+        height += 14 * SCALE
+
+    avatar_size = 32 * SCALE
+    tile = _avatar(avatar, name, avatar_size, (200, 60, 60))
+    canvas.paste(tile, (pad, comment_top - 2 * SCALE), tile)
+
+    name_x = pad + avatar_size + 12 * SCALE
+    draw.text(
+        (name_x, comment_top + 12 * SCALE),
+        "@" + name.lstrip("@"),
+        font=_font(int(13 * SCALE), bold=True),
+        fill=(241, 241, 241),
+        anchor="ls",
+    )
+    time_w = _font(int(12 * SCALE)).getlength(time)
+    draw.text(
+        (name_x + _font(int(13 * SCALE), bold=True).getlength("@" + name.lstrip("@")) + 8 * SCALE, comment_top + 12 * SCALE),
+        time,
+        font=_font(int(12 * SCALE)),
+        fill=(170, 170, 170),
+        anchor="ls",
+    )
+    if hearted:
+        heart_x = name_x + _font(int(13 * SCALE), bold=True).getlength("@" + name.lstrip("@")) + 8 * SCALE + time_w + 8 * SCALE
+        draw.ellipse((heart_x, comment_top + 2 * SCALE, heart_x + 11 * SCALE, comment_top + 13 * SCALE), fill=(230, 33, 23))
+        draw.polygon(
+            [
+                (heart_x + 5.5 * SCALE, comment_top + 11 * SCALE),
+                (heart_x + 2 * SCALE, comment_top + 6 * SCALE),
+                (heart_x + 5.5 * SCALE, comment_top + 4 * SCALE),
+                (heart_x + 9 * SCALE, comment_top + 6 * SCALE),
+            ],
+            fill=(255, 255, 255),
+        )
+
+    body.draw(canvas, pad + avatar_size + 12 * SCALE, text_y, (241, 241, 241))
+
+    small = _font(int(12 * SCALE))
+    cursor = name_x
+    _thumb_icon(draw, cursor, action_y - 6 * SCALE, 14 * SCALE, (170, 170, 170))
+    cursor += 18 * SCALE
+    draw.text((cursor, action_y), likes, font=small, fill=(170, 170, 170), anchor="ls")
+    cursor += small.getlength(likes) + 22 * SCALE
+    _thumb_icon(draw, cursor, action_y - 6 * SCALE, 14 * SCALE, (170, 170, 170), up=False)
+    cursor += 18 * SCALE + 24 * SCALE
+    draw.text((cursor, action_y), "Reply", font=_font(int(12 * SCALE), bold=True), fill=(241, 241, 241), anchor="ls")
+    cursor += _font(int(12 * SCALE), bold=True).getlength("Reply") + 16 * SCALE
+    draw.text((cursor, action_y), replies + " replies", font=small, fill=(170, 170, 170), anchor="ls")
+    return _png(canvas, width, height)
