@@ -33,9 +33,9 @@ Five pictures per minute per user, 2000 characters per message.
 | `kick` | Chat line(s) with badge, brand-green name. | `member`, `name`, `colour`, `badge` |
 | `facebook` | Post: header with globe and menu, reaction bubbles, Like/Comment/Share bar. | `member`, `name`, `timestamp` |
 | `reddit` | Comment: thread rail, u/name, vote pill with arrows, Reply/Share/Save. | `member`, `name`, `timestamp` |
-| `instagram` | DM: blue outgoing bubble, media bubble on its own, time under the bubble. | `member`, `name`, `timestamp`, `outgoing` |
-| `snapchat` | Chat: blue outgoing bubble with "Opened · time" underneath. | `member`, `name`, `timestamp`, `outgoing` |
-| `imessage` | Thread: blue outgoing bubble, "Read 21:07" underneath. | `member`, `name`, `timestamp`, `outgoing` |
+| `instagram` | DM: "Active now" header with call icons, "Seen" under your message, pink camera button and "Message..." bar. | `member`, `name`, `timestamp`, `outgoing` |
+| `snapchat` | Chat: left aligned "Today", "Opened" under your message, yellow camera ring and "Send a Chat" bar. | `member`, `name`, `timestamp`, `outgoing` |
+| `imessage` | Thread: centred photo above the name, "Today 21:07" divider, "Read 21:07" receipt, plus button and "iMessage" field. | `member`, `name`, `timestamp`, `outgoing` |
 | `youtube` | Comment under a video: thumbnail, title, @name, like/dislike, Reply, replies. | `member`, `name`, `timestamp` |
 
 `colour` is `#rrggbb`, `badge` is none/mod/sub/vip/founder, and every line break

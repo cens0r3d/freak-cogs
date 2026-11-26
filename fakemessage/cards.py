@@ -1226,7 +1226,50 @@ def reddit(
 # -- Instagram / Snapchat ------------------------------------------------
 
 
-def _messenger(
+def _glyph(draw: ImageDraw.ImageDraw, kind: str, cx: float, cy: float, colour, size: float = 12):
+    """Tiny line icons for the chat bars: camera, mic, arrow, sticker."""
+    s = size * SCALE
+    if kind == "camera":
+        draw.rounded_rectangle(
+            (cx - s * 0.55, cy - s * 0.35, cx + s * 0.55, cy + s * 0.5),
+            radius=2 * SCALE,
+            outline=colour,
+            width=int(1.6 * SCALE),
+        )
+        draw.ellipse(
+            (cx - s * 0.2, cy - s * 0.02, cx + s * 0.2, cy + s * 0.3),
+            outline=colour,
+            width=int(1.6 * SCALE),
+        )
+        draw.line((cx - s * 0.3, cy - s * 0.45, cx + s * 0.05, cy - s * 0.45), fill=colour, width=int(1.6 * SCALE))
+    elif kind == "mic":
+        draw.rounded_rectangle(
+            (cx - s * 0.16, cy - s * 0.5, cx + s * 0.16, cy + s * 0.1),
+            radius=int(s * 0.16),
+            outline=colour,
+            width=int(1.6 * SCALE),
+        )
+        draw.arc((cx - s * 0.34, cy - s * 0.28, cx + s * 0.34, cy + s * 0.34), start=0, end=180, fill=colour, width=int(1.6 * SCALE))
+        draw.line((cx, cy + s * 0.34, cx, cy + s * 0.52), fill=colour, width=int(1.6 * SCALE))
+    elif kind == "arrow":
+        draw.polygon(
+            [(cx, cy - s * 0.4), (cx + s * 0.3, cy - s * 0.05), (cx + s * 0.1, cy - s * 0.05),
+             (cx + s * 0.1, cy + s * 0.4), (cx - s * 0.1, cy + s * 0.4), (cx - s * 0.1, cy - s * 0.05),
+             (cx - s * 0.3, cy - s * 0.05)],
+            fill=colour,
+        )
+    elif kind == "image":
+        draw.rounded_rectangle(
+            (cx - s * 0.5, cy - s * 0.42, cx + s * 0.5, cy + s * 0.42),
+            radius=2 * SCALE,
+            outline=colour,
+            width=int(1.6 * SCALE),
+        )
+        draw.ellipse((cx - s * 0.28, cy - s * 0.22, cx - s * 0.08, cy - s * 0.02), fill=colour)
+        draw.line((cx - s * 0.42, cy + s * 0.32, cx - s * 0.02, cy - s * 0.08, cx + s * 0.42, cy + s * 0.32), fill=colour, width=int(1.6 * SCALE))
+
+
+def _chat_screen(
     *,
     name: str,
     message: str,
@@ -1242,16 +1285,23 @@ def _messenger(
     muted,
     radius: float,
     accent,
-    mark: Optional[str] = None,
+    header: str = "inline",
+    divider: Optional[str] = None,
+    receipt: Optional[str] = None,
+    bottom: str = "message",
+    header_icons: str = "call",
+    divider_align: str = "center",
+    placeholder: str = "Message...",
     width: int = 420,
     images: Optional[Dict[str, Image.Image]] = None,
     image: Optional[bytes] = None,
 ) -> bytes:
-    """Shared mobile-messenger layout: media bubble above, text bubble, time below."""
+    """One chat screenshot, shaped by the flags each messenger needs."""
     device_w = width * SCALE
-    header_h = 56 * SCALE
+    header_h = (58 if header == "centered" else 56) * SCALE
     pad_x = 12 * SCALE
     pad_y = 9 * SCALE
+    bar_h = 52 * SCALE
 
     body = Rich(message, 14.5, markers=MARKERS["chat"], images=images, line_height=19.5)
     body.wrap(288 * SCALE)
@@ -1259,94 +1309,103 @@ def _messenger(
     text_w = body.width + pad_x * 2
     text_h = body.height + pad_y * 2
     photo = _fit_image(image, 288 * SCALE, 300 * SCALE)
-    photo_h = 0
+    photo_h = photo.height if photo is not None else 0
     if photo is not None:
         photo = _top_rounded(photo, radius)
-        photo_h = photo.height
 
     gap = 4 * SCALE
-    top = header_h + 16 * SCALE
+    top = header_h + (22 * SCALE if divider else 14 * SCALE)
     photo_top = top
     text_top = top + (photo_h + gap if photo is not None else 0)
-    time_font = _font(int(10 * SCALE))
-    if mark == "opened":
-        stamp = "Opened · " + time
-    elif mark == "read":
-        stamp = "Read " + time
-    elif mark == "delivered":
-        stamp = "Delivered"
-    else:
-        stamp = time
-    stamp_y = text_top + text_h + 5 * SCALE
-    height = stamp_y + 14 * SCALE + 12 * SCALE
+    note_y = text_top + text_h + 7 * SCALE
+    height = note_y + 12 * SCALE + bar_h + 10 * SCALE
 
     canvas = Image.new("RGB", (device_w, height), bg)
     draw = ImageDraw.Draw(canvas)
 
     draw.rectangle((0, 0, device_w, header_h), fill=header_bg)
-    draw.line((0, header_h, device_w, header_h), fill=(38, 38, 38), width=SCALE)
+    draw.line((0, header_h, device_w, header_h), fill=(44, 44, 46), width=SCALE)
 
-    # back chevron, then the avatar clear of it
-    draw.line(
-        (30 * SCALE, header_h / 2 - 7 * SCALE, 21 * SCALE, header_h / 2),
-        fill=text_colour,
-        width=2 * SCALE,
-    )
-    draw.line(
-        (21 * SCALE, header_h / 2, 30 * SCALE, header_h / 2 + 7 * SCALE),
-        fill=text_colour,
-        width=2 * SCALE,
-    )
-
-    avatar_size = 36 * SCALE
-    tile = _avatar(avatar, name, avatar_size, accent)
-    canvas.paste(tile, (42 * SCALE, (header_h - avatar_size) // 2), tile)
-
+    small = _font(int(11 * SCALE))
+    receipt_colour = tuple(min(255, c + 30) for c in muted)
     name_font = _font(int(15 * SCALE), bold=True)
-    label_x = 42 * SCALE + avatar_size + 10 * SCALE
-    draw.text((label_x, header_h / 2 - 5 * SCALE), name, font=name_font, fill=text_colour, anchor="ls")
-    draw.text(
-        (label_x, header_h / 2 + 12 * SCALE),
-        status,
-        font=_font(int(11.5 * SCALE)),
-        fill=muted,
-        anchor="ls",
-    )
 
-    icon_y = header_h / 2
-    video_x = device_w - 66 * SCALE
-    draw.rounded_rectangle(
-        (video_x, icon_y - 6 * SCALE, video_x + 12 * SCALE, icon_y + 5 * SCALE),
-        radius=3 * SCALE,
-        outline=text_colour,
-        width=2 * SCALE,
-    )
-    draw.polygon(
-        [
-            (video_x + 14 * SCALE, icon_y - 5 * SCALE),
-            (video_x + 20 * SCALE, icon_y),
-            (video_x + 14 * SCALE, icon_y + 5 * SCALE),
-        ],
-        fill=text_colour,
-    )
-    phone_x = device_w - 34 * SCALE
-    draw.arc(
-        (phone_x, icon_y - 9 * SCALE, phone_x + 18 * SCALE, icon_y + 9 * SCALE),
-        start=210,
-        end=330,
-        fill=text_colour,
-        width=2 * SCALE,
-    )
-    draw.line((phone_x + 3 * SCALE, icon_y - 7 * SCALE, phone_x + 3 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
-    draw.line((phone_x + 15 * SCALE, icon_y - 7 * SCALE, phone_x + 15 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
+    if header == "centered":
+        # iMessage: photo centred above the name, FaceTime icon right
+        avatar_size = 30 * SCALE
+        tile = _avatar(avatar, name, avatar_size, accent)
+        canvas.paste(tile, ((device_w - avatar_size) // 2, 5 * SCALE), tile)
+        draw.text(
+            (device_w / 2, header_h - 9 * SCALE),
+            name,
+            font=_font(int(12 * SCALE), bold=True),
+            fill=text_colour,
+            anchor="ms",
+        )
+        chevron = (10, 132, 255)
+        draw.line((26 * SCALE, header_h / 2 - 7 * SCALE, 17 * SCALE, header_h / 2), fill=chevron, width=int(2.2 * SCALE))
+        draw.line((17 * SCALE, header_h / 2, 26 * SCALE, header_h / 2 + 7 * SCALE), fill=chevron, width=int(2.2 * SCALE))
+        call_x = device_w - 34 * SCALE
+        draw.rounded_rectangle(
+            (call_x, header_h / 2 - 7 * SCALE, call_x + 13 * SCALE, header_h / 2 + 5 * SCALE),
+            radius=3 * SCALE,
+            outline=chevron,
+            width=int(1.8 * SCALE),
+        )
+        draw.polygon(
+            [(call_x + 15 * SCALE, header_h / 2 - 6 * SCALE), (call_x + 21 * SCALE, header_h / 2),
+             (call_x + 15 * SCALE, header_h / 2 + 6 * SCALE)],
+            fill=chevron,
+        )
+    else:
+        draw.line((30 * SCALE, header_h / 2 - 7 * SCALE, 21 * SCALE, header_h / 2), fill=text_colour, width=2 * SCALE)
+        draw.line((21 * SCALE, header_h / 2, 30 * SCALE, header_h / 2 + 7 * SCALE), fill=text_colour, width=2 * SCALE)
+        avatar_size = 34 * SCALE
+        tile = _avatar(avatar, name, avatar_size, accent)
+        canvas.paste(tile, (40 * SCALE, (header_h - avatar_size) // 2), tile)
+        label_x = 40 * SCALE + avatar_size + 10 * SCALE
+        draw.text((label_x, header_h / 2 - 5 * SCALE), name, font=name_font, fill=text_colour, anchor="ls")
+        if status:
+            draw.text((label_x, header_h / 2 + 12 * SCALE), status, font=small, fill=muted, anchor="ls")
+        icon_y = header_h / 2
+        if header_icons == "callmenu":
+            for i in range(3):
+                yy = icon_y - 5 * SCALE + i * 5 * SCALE
+                draw.line((device_w - 52 * SCALE, yy, device_w - 34 * SCALE, yy), fill=text_colour, width=2 * SCALE)
+        video_x = device_w - (36 if header_icons != "callmenu" else 66) * SCALE
+        if header_icons != "callmenu":
+            draw.rounded_rectangle(
+            (video_x, icon_y - 6 * SCALE, video_x + 12 * SCALE, icon_y + 5 * SCALE),
+                radius=3 * SCALE,
+                outline=text_colour,
+                width=2 * SCALE,
+            )
+            draw.polygon(
+                [(video_x + 14 * SCALE, icon_y - 5 * SCALE), (video_x + 20 * SCALE, icon_y), (video_x + 14 * SCALE, icon_y + 5 * SCALE)],
+                fill=text_colour,
+            )
+        phone_x = device_w - (72 if header_icons != "callmenu" else 104) * SCALE
+        draw.arc((phone_x, icon_y - 9 * SCALE, phone_x + 18 * SCALE, icon_y + 9 * SCALE), start=210, end=330, fill=text_colour, width=2 * SCALE)
+        draw.line((phone_x + 3 * SCALE, icon_y - 7 * SCALE, phone_x + 3 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
+        draw.line((phone_x + 15 * SCALE, icon_y - 7 * SCALE, phone_x + 15 * SCALE, icon_y - 3 * SCALE), fill=text_colour, width=3 * SCALE)
+
+    if divider:
+        if divider_align == "left":
+            draw.text((14 * SCALE, header_h + 12 * SCALE), divider, font=_font(int(10.5 * SCALE)), fill=muted, anchor="ls")
+        else:
+            draw.text((device_w / 2, header_h + 10 * SCALE), divider, font=_font(int(11 * SCALE)), fill=muted, anchor="ms")
 
     def side(bubble_width: int) -> int:
-        if outgoing:
-            return device_w - 12 * SCALE - bubble_width
-        return 12 * SCALE
+        return device_w - 12 * SCALE - bubble_width if outgoing else 12 * SCALE
 
     if photo is not None:
-        _bubble(draw, (side(photo.width), photo_top, side(photo.width) + photo.width, photo_top + photo_h), bubble_out if outgoing else bubble_in, radius)
+        _bubble(
+            draw,
+            (side(photo.width), photo_top, side(photo.width) + photo.width, photo_top + photo_h),
+            bubble_out if outgoing else bubble_in,
+            radius,
+            tail_side="right" if outgoing else "left",
+        )
         canvas.paste(photo, (side(photo.width), photo_top), photo)
 
     _bubble(
@@ -1354,16 +1413,54 @@ def _messenger(
         (side(text_w), text_top, side(text_w) + text_w, text_top + text_h),
         bubble_out if outgoing else bubble_in,
         radius,
+        tail_side="right" if outgoing else "left",
     )
-    body.draw(canvas, side(text_w) + pad_x, text_top + pad_y, (250, 250, 250))
+    body.draw(canvas, side(text_w) + pad_x, text_top + pad_y, text_colour)
 
-    draw.text(
-        (device_w - 12 * SCALE if outgoing else 12 * SCALE, stamp_y),
-        stamp,
-        font=time_font,
-        fill=muted,
-        anchor="rs" if outgoing else "ls",
-    )
+    if receipt:
+        draw.text(
+            (device_w - 12 * SCALE if outgoing else 12 * SCALE, note_y),
+            receipt,
+            font=_font(int(11 * SCALE)),
+            fill=receipt_colour,
+            anchor="rs" if outgoing else "ls",
+        )
+
+    # bottom input bar, the clearest fingerprint of each app
+    bar_top = height - bar_h - 6 * SCALE
+    draw.rectangle((0, bar_top, device_w, height), fill=header_bg)
+    draw.line((0, bar_top, device_w, bar_top), fill=(44, 44, 46), width=SCALE)
+    pill_x0, pill_x1 = 16 * SCALE, device_w - 16 * SCALE
+    pill_y0, pill_y1 = bar_top + 9 * SCALE, bar_top + 43 * SCALE
+
+    if bottom == "snapchat":
+        ring = device_w - 26 * SCALE
+        draw.ellipse((12 * SCALE, pill_y0 + 2 * SCALE, 12 * SCALE + 22 * SCALE, pill_y0 + 24 * SCALE), outline=(255, 252, 0), width=int(2 * SCALE))
+        _glyph(draw, "camera", 23 * SCALE, pill_y0 + 13 * SCALE, (255, 252, 0), 11)
+        _glyph(draw, "mic", ring - 14 * SCALE, pill_y0 + 13 * SCALE, muted, 12)
+        _glyph(draw, "sticker" if False else "image", ring, pill_y0 + 13 * SCALE, muted, 12)
+        pill_x0 = 40 * SCALE
+        pill_x1 = device_w - 44 * SCALE
+        draw.rounded_rectangle((pill_x0, pill_y0, pill_x1, pill_y1), radius=(pill_y1 - pill_y0) / 2, fill=(38, 38, 38))
+        draw.text(((pill_x0 + pill_x1) / 2, (pill_y0 + pill_y1) / 2), placeholder, font=_font(int(12 * SCALE)), fill=muted, anchor="mm")
+    elif bottom == "imessage":
+        # empty field in iOS: a plus button on the left, the mic on the right
+        draw.ellipse((pill_x0, pill_y0, pill_x0 + 34 * SCALE, pill_y1), fill=(44, 44, 46))
+        draw.line((pill_x0 + 11 * SCALE, (pill_y0 + pill_y1) / 2, pill_x0 + 23 * SCALE, (pill_y0 + pill_y1) / 2), fill=(190, 190, 192), width=int(1.8 * SCALE))
+        draw.line(((pill_x0 + 17 * SCALE), (pill_y0 + pill_y1) / 2 - 6 * SCALE, pill_x0 + 17 * SCALE, (pill_y0 + pill_y1) / 2 + 6 * SCALE), fill=(190, 190, 192), width=int(1.8 * SCALE))
+        field_x0 = pill_x0 + 44 * SCALE
+        draw.rounded_rectangle((field_x0, pill_y0, pill_x1 - 34 * SCALE, pill_y1), radius=(pill_y1 - pill_y0) / 2, outline=(58, 58, 60), width=int(1.6 * SCALE))
+        draw.text((field_x0 + 14 * SCALE, (pill_y0 + pill_y1) / 2), placeholder, font=small, fill=muted, anchor="lm")
+        _glyph(draw, "mic", pill_x1 - 17 * SCALE, (pill_y0 + pill_y1) / 2, muted, 13)
+    else:  # instagram: camera circle, then the field with mic and gallery
+        draw.ellipse((pill_x0, pill_y0, pill_x0 + 34 * SCALE, pill_y1), outline=(215, 60, 130), width=int(1.8 * SCALE))
+        _glyph(draw, "camera", pill_x0 + 17 * SCALE, (pill_y0 + pill_y1) / 2, (215, 60, 130), 12)
+        pill_x0 = pill_x0 + 44 * SCALE
+        draw.rounded_rectangle((pill_x0, pill_y0, pill_x1, pill_y1), radius=(pill_y1 - pill_y0) / 2, outline=(58, 58, 60), width=int(1.6 * SCALE))
+        draw.text((pill_x0 + 14 * SCALE, (pill_y0 + pill_y1) / 2), placeholder, font=small, fill=muted, anchor="lm")
+        _glyph(draw, "mic", pill_x1 - 40 * SCALE, (pill_y0 + pill_y1) / 2, muted, 12)
+        _glyph(draw, "image", pill_x1 - 20 * SCALE, (pill_y0 + pill_y1) / 2, muted, 12)
+
     return _png(canvas, device_w, height)
 
 
@@ -1378,8 +1475,8 @@ def instagram(
     images: Optional[Dict[str, Image.Image]] = None,
     image: Optional[bytes] = None,
 ) -> bytes:
-    """An Instagram direct message, dark mode."""
-    return _messenger(
+    """An Instagram DM, dark mode: Active now header, Seen receipt, Message bar."""
+    return _chat_screen(
         name=name,
         message=message,
         time=time,
@@ -1387,13 +1484,17 @@ def instagram(
         avatar=avatar,
         status=status,
         bg=(0, 0, 0),
-        header_bg=(0, 0, 0),
+        header_bg=(18, 18, 18),
         bubble_in=(38, 38, 38),
         bubble_out=(55, 151, 240),
         text_colour=(245, 245, 245),
         muted=(142, 142, 142),
-        radius=18,
+        radius=22,
         accent=(221, 42, 123),
+        header="inline",
+        receipt="Seen" if outgoing else None,
+        bottom="message",
+        placeholder="Message...",
         images=images,
         image=image,
     )
@@ -1410,26 +1511,33 @@ def snapchat(
     images: Optional[Dict[str, Image.Image]] = None,
     image: Optional[bytes] = None,
 ) -> bytes:
-    """A Snapchat chat, dark mode, with the 'Opened' marker on sent messages."""
-    return _messenger(
+    """A Snapchat chat, dark mode: Today divider, Opened, Send a Chat bar."""
+    return _chat_screen(
         name=name,
         message=message,
         time=time,
         outgoing=outgoing,
         avatar=avatar,
         status=status,
-        bg=(18, 18, 18),
-        header_bg=(12, 12, 12),
+        bg=(10, 10, 10),
+        header_bg=(16, 16, 16),
         bubble_in=(44, 44, 44),
         bubble_out=(15, 173, 255),
         text_colour=(255, 255, 255),
         muted=(160, 160, 160),
         radius=20,
         accent=(255, 252, 0),
-        mark="opened" if outgoing else None,
+        header="inline",
+        header_icons="callmenu",
+        divider="Today",
+        divider_align="left",
+        receipt="Opened" if outgoing else None,
+        bottom="snapchat",
+        placeholder="Send a Chat",
         images=images,
         image=image,
     )
+
 
 def imessage(
     *,
@@ -1441,14 +1549,14 @@ def imessage(
     images: Optional[Dict[str, Image.Image]] = None,
     image: Optional[bytes] = None,
 ) -> bytes:
-    """An iMessage thread, dark mode: blue outgoing bubble, Read under it."""
-    return _messenger(
+    """An iMessage thread, dark mode: centred photo, Today divider, Read receipt."""
+    return _chat_screen(
         name=name,
         message=message,
         time=time,
         outgoing=outgoing,
         avatar=avatar,
-        status="iMessage",
+        status="",
         bg=(0, 0, 0),
         header_bg=(28, 28, 30),
         bubble_in=(38, 38, 42),
@@ -1457,7 +1565,11 @@ def imessage(
         muted=(142, 142, 147),
         radius=18,
         accent=(11, 147, 246),
-        mark="read" if outgoing else None,
+        header="centered",
+        divider="Today " + time,
+        receipt=("Read " + time) if outgoing else None,
+        bottom="imessage",
+        placeholder="iMessage",
         images=images,
         image=image,
     )
