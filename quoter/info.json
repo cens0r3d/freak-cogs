@@ -2,10 +2,10 @@
   "author": [
     "cens0r3d"
   ],
-  "install_msg": "quoter loaded. Reply to a message with `[p]quote`, or pass a message link: `[p]quote <link> [--split] [--light] [--gray] [--font sans] [--watermark]`. `--split` draws the wide photo-and-text layout; `[p]quote set style split` makes it the server default. Right-click a message -> Apps -> **Quote** does the same once you run `[p]slash enablecog quoter` and then `[p]slash sync`. The bot needs Attach Files; the host needs Pillow (`[p]pipinstall pillow`).",
+  "install_msg": "quoter loaded. Reply to a message with `[p]quote`, or pass a message link: `[p]quote <link> [--split] [--light] [--gray] [--font sans] [--watermark]`. `--split` draws the wide layout with the author's avatar beside the text; `[p]quote set style split` makes it the server default. Right-click a message -> Apps -> **Quote** does the same once you run `[p]slash enablecog quoter` and then `[p]slash sync`. The bot needs Attach Files; the host needs Pillow (`[p]pipinstall pillow`).",
   "name": "quoter",
   "short": "Inspirational quote cards from messages",
-  "description": "Turns any message into a quote card in one of two layouts: a square gradient card with the author's avatar in a coloured ring, or the wide split card - the picture from the quoted message on one side and the text on a solid panel. Both take a serif, sans, light or monospace face, a dark or light theme, grayscale and an optional watermark. Works from a reply, a message link or a message context menu, with per-server defaults for layout, picture side, font, theme, grayscale, accent and watermark.",
+  "description": "Turns any message into a quote card in one of two layouts: a square gradient card with the author's avatar in a coloured ring, or the wide split card - the author's avatar on one side and the text on a solid panel. Both take a serif, sans, light or monospace face, a dark or light theme, grayscale and an optional watermark. Works from a reply, a message link or a message context menu, with per-server defaults for layout, picture side, font, theme, grayscale, accent and watermark.",
   "end_user_data_statement": "This cog does not store any user data. Avatars are fetched while a card is drawn and are not written to disk.",
   "tags": [
     "fun",

@@ -38,7 +38,6 @@ SIDES = card.SIDES
 MAX_WATERMARK = 40
 AVATAR_TIMEOUT = aiohttp.ClientTimeout(total=10)
 AVATAR_BYTES = 4 * 1024 * 1024
-PHOTO_BYTES = 8 * 1024 * 1024
 
 USAGE = (
     "`[p]quote` - quote the message you replied to\n"
@@ -164,7 +163,7 @@ class Quoter(commands.Cog):
 
         try:
             source = await self._resolve(ctx, target)
-            png = await self._compose(source, ctx.guild, options, invoking=ctx.message)
+            png = await self._compose(source, ctx.guild, options)
         except QuoteError as exc:
             await self._send_error(ctx, str(exc))
             return
@@ -220,9 +219,8 @@ class Quoter(commands.Cog):
         await self.config.guild(ctx.guild).style.set(style)
         if style == "split":
             await ctx.send(
-                "Cards now use the split layout: the picture from the quoted message "
-                "on one side, the text on a solid panel. Without a picture the card "
-                "falls back to the gradient look."
+                "Cards now use the split layout: the author's avatar on one side, the "
+                "text on a solid panel."
             )
         else:
             await ctx.send("Cards use the gradient layout again.")
@@ -231,7 +229,7 @@ class Quoter(commands.Cog):
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
     async def quote_set_side(self, ctx: commands.Context, value: str) -> None:
-        """Put the picture of a split card on the `left` or the `right`."""
+        """Put the avatar of a split card on the `left` or the `right`."""
         side = value.strip().lower()
         if side not in SIDES:
             await self._send_error(
@@ -414,7 +412,6 @@ class Quoter(commands.Cog):
         message: discord.Message,
         guild: Optional[discord.Guild],
         options: Dict[str, Any],
-        invoking: Optional[discord.Message] = None,
     ) -> bytes:
         text = card.clean_message(message.content, resolver=self._resolver(guild))
         if not text:
@@ -446,13 +443,12 @@ class Quoter(commands.Cog):
 
         photo = None
         if style == "split":
-            photo = await self._photo(message, invoking)
+            photo = await self._avatar(message.author, size=1024)
             if photo is None:
                 if "style" in options:
                     raise QuoteError(
-                        "The split style needs a picture: attach an image to your "
-                        "message, or quote a message that has one (an attachment or "
-                        "an embed image)."
+                        "The split style puts the author's avatar next to the text, "
+                        "and that avatar could not be fetched. Try again in a moment."
                     )
                 style = "gradient"
 
@@ -492,46 +488,9 @@ class Quoter(commands.Cog):
                 "The card could not be drawn. The traceback is in the bot log."
             ) from exc
 
-    async def _avatar(self, user: discord.abc.User) -> Optional[bytes]:
-        asset = user.display_avatar.replace(size=256, static_format="png")
+    async def _avatar(self, user: discord.abc.User, size: int = 256) -> Optional[bytes]:
+        asset = user.display_avatar.replace(size=size, static_format="png")
         return await self._download(asset.url, AVATAR_BYTES)
-
-    async def _photo(
-        self, message: discord.Message, invoking: Optional[discord.Message] = None
-    ) -> Optional[bytes]:
-        """First image of the quoted message, then of the command message."""
-        seen = []
-        for candidate in (message, invoking):
-            if candidate is None or candidate in seen:
-                continue
-            seen.append(candidate)
-            for attachment in getattr(candidate, "attachments", []) or []:
-                if not self._is_image(attachment):
-                    continue
-                if attachment.size and attachment.size > PHOTO_BYTES:
-                    continue
-                data = await self._download(attachment.url, PHOTO_BYTES)
-                if data:
-                    return data
-        for embed in getattr(message, "embeds", []) or []:
-            for asset in (embed.image, embed.thumbnail):
-                url = getattr(asset, "url", None)
-                if not url:
-                    continue
-                data = await self._download(url, PHOTO_BYTES)
-                if data:
-                    return data
-        return None
-
-    @staticmethod
-    def _is_image(attachment: Any) -> bool:
-        content_type = getattr(attachment, "content_type", None) or ""
-        if content_type.startswith("image/"):
-            return True
-        if content_type:
-            return False
-        name = (getattr(attachment, "filename", "") or "").lower()
-        return name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
 
     async def _download(self, url: str, limit: int) -> Optional[bytes]:
         try:
