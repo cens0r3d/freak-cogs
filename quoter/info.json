@@ -1,0 +1,27 @@
+{
+  "author": [
+    "cens0r3d"
+  ],
+  "install_msg": "quoter loaded. Reply to a message with `[p]quote`, or pass a message link: `[p]quote <link> [--light] [--gray] [--font sans] [--watermark]`. Right-click a message -> Apps -> **Quote** does the same once you run `[p]slash enablecog quoter` and then `[p]slash sync`. The bot needs Attach Files; the host needs Pillow (`[p]pipinstall pillow`).",
+  "name": "quoter",
+  "short": "Inspirational quote cards from messages",
+  "description": "Turns any message into a square quote card: the author's avatar in a coloured ring, the text in a serif, sans, light or monospace face, a gradient background derived from the avatar's own colour, the attribution below and an optional watermark. Works from a reply, a message link or a message context menu, with per-server defaults for font, theme, grayscale, accent and watermark.",
+  "end_user_data_statement": "This cog does not store any user data. Avatars are fetched while a card is drawn and are not written to disk.",
+  "tags": [
+    "fun",
+    "image",
+    "quote",
+    "meme"
+  ],
+  "requirements": [
+    "pillow>=10.0"
+  ],
+  "min_bot_version": "3.5.0",
+  "hidden": false,
+  "disabled": false,
+  "type": "COG",
+  "min_python_version": [
+    3,
+    9
+  ]
+}
