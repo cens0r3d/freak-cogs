@@ -60,6 +60,24 @@ MARK_FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
 )
 
+SPLIT_BOLD_FONTS = (
+    "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+)
+
+SPLIT_ITALIC_FONTS = (
+    "/usr/share/fonts/truetype/lato/Lato-Italic.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+)
+
+SPLIT_TEXT_FONTS = (
+    "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+
 SANS_FONTS = (
     "/usr/share/fonts/truetype/lato/Lato-Semibold.ttf",
     "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
@@ -69,6 +87,15 @@ SANS_FONTS = (
 )
 
 THEMES = ("dark", "light")
+STYLES = ("gradient", "split")
+SIDES = ("left", "right")
+
+SPLIT_WIDTH = 1200
+SPLIT_PANEL = 600
+SPLIT_MIN_HEIGHT = 600
+SPLIT_PAD = 80
+SPLIT_SIZES = (40, 36, 32, 28, 24)
+SPLIT_MAX_LINES = 9
 
 
 def available() -> bool:
@@ -163,8 +190,19 @@ _FLAG_ALIASES = {
     "--dark": ("theme", "dark"),
     "--watermark": ("watermark", True),
     "--no-watermark": ("watermark", False),
+    "--split": ("style", "split"),
+    "--photo": ("style", "split"),
+    "--gradient": ("style", "gradient"),
+    "--card": ("style", "gradient"),
+    "--flip": ("side", "flip"),
 }
-_VALUE_FLAGS = {"--font": "font", "--theme": "theme", "--accent": "accent"}
+_VALUE_FLAGS = {
+    "--font": "font",
+    "--theme": "theme",
+    "--accent": "accent",
+    "--style": "style",
+    "--side": "side",
+}
 
 
 def parse_invocation(
@@ -211,6 +249,18 @@ def parse_invocation(
                     target,
                     options,
                     f"Unknown theme `{value}` - pick one of {_list(THEMES)}.",
+                )
+            if name == "--style" and value not in STYLES:
+                return (
+                    target,
+                    options,
+                    f"Unknown style `{value}` - pick one of {_list(STYLES)}.",
+                )
+            if name == "--side" and value not in SIDES:
+                return (
+                    target,
+                    options,
+                    f"Unknown side `{value}` - pick one of {_list(SIDES)}.",
                 )
             if name == "--accent":
                 if not re.fullmatch(r"#?[0-9a-f]{6}", value):
@@ -531,3 +581,176 @@ def render(
     buffer = io.BytesIO()
     output.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
+
+
+def _cover(data: bytes, width: int, height: int, grayscale: bool):
+    """Crop a picture to exactly ``width x height`` without distorting it."""
+    with Image.open(io.BytesIO(data)) as source:
+        image = source.convert("RGB")
+        ratio = max(width / image.width, height / image.height)
+        target = (
+            max(1, int(image.width * ratio)),
+            max(1, int(image.height * ratio)),
+        )
+        image = image.resize(target, Image.Resampling.LANCZOS)
+        left = (image.width - width) // 2
+        top = (image.height - height) // 2
+        image = image.crop((left, top, left + width, top + height))
+    if grayscale:
+        image = image.convert("L").convert("RGB")
+    return image
+
+
+def _fade(width: int, height: int, colour: RGB, towards_panel: bool):
+    """Transparent -> ``colour`` ramp, used to blend the photo into the panel."""
+    ramp = Image.new("L", (width, 1))
+    pixels = ramp.load()
+    for x in range(width):
+        value = int(255 * (x / max(width - 1, 1)))
+        pixels[x, 0] = 255 - value if towards_panel else value
+    mask = ramp.resize((width, height), Image.Resampling.BILINEAR)
+    strip = Image.new("RGBA", (width, height), colour + (0,))
+    strip.putalpha(mask)
+    return strip
+
+
+def render_split(
+    *,
+    text: str,
+    author: str,
+    handle: str = "",
+    image: Optional[bytes] = None,
+    theme: str = "dark",
+    grayscale: bool = False,
+    watermark: Optional[str] = None,
+    side: str = "left",
+    font: Optional[str] = None,
+) -> bytes:
+    """Draw the split card: a picture on one side, the quote on a solid panel.
+
+    This is the layout of the quote images people post on Discord: photo on
+    the left, a near-black panel on the right with the quote in a bold sans
+    face, an italic ``- name`` and the ``@handle`` in grey beneath it.
+    """
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow is not installed")
+    if image is None:
+        raise ValueError("render_split needs a picture")
+
+    theme = theme if theme in THEMES else "dark"
+    side = side if side in SIDES else "left"
+    text = text.strip() or "…"
+
+    scale = SCALE
+    width = SPLIT_WIDTH * scale
+    panel = SPLIT_PANEL * scale
+    photo_width = width - panel
+    pad = SPLIT_PAD * scale
+    text_max = panel - 2 * pad
+
+    if font and font not in {"sans", "light"}:
+        quote_paths = QUOTE_FONTS.get(font, SPLIT_BOLD_FONTS)
+    else:
+        quote_paths = SPLIT_BOLD_FONTS
+
+    probe = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+    size = SPLIT_SIZES[0]
+    quote_font = _load_font(quote_paths, size * scale)
+    lines: List[str] = [text]
+    for size in SPLIT_SIZES:
+        quote_font = _load_font(quote_paths, size * scale)
+        lines = _wrap(probe, text, quote_font, text_max)
+        if len(lines) <= SPLIT_MAX_LINES:
+            break
+
+    line_height = int(size * scale * 1.28)
+    name_font = _load_font(SPLIT_ITALIC_FONTS, 24 * scale)
+    handle_font = _load_font(SPLIT_TEXT_FONTS, 18 * scale)
+    gap_name = 30 * scale
+    gap_handle = 8 * scale
+    name_height = 24 * scale
+    handle_height = 18 * scale
+
+    content = len(lines) * line_height + gap_name + name_height
+    if handle:
+        content += gap_handle + handle_height
+
+    height = max(SPLIT_MIN_HEIGHT * scale, content + 150 * scale)
+    if height % scale:
+        height += scale - (height % scale)
+
+    if theme == "dark":
+        panel_colour: RGB = (11, 11, 13)
+        text_colour: RGB = (247, 247, 249)
+        muted: RGB = (150, 154, 162)
+    else:
+        panel_colour = (246, 246, 248)
+        text_colour = (18, 18, 22)
+        muted = (108, 112, 120)
+
+    canvas = Image.new("RGB", (width, height), panel_colour)
+    photo = _cover(image, photo_width, height, grayscale)
+    fade_width = 130 * scale
+    if side == "right":
+        canvas.paste(photo, (panel, 0))
+        strip = _fade(fade_width, height, panel_colour, towards_panel=True)
+        canvas = Image.alpha_composite(
+            canvas.convert("RGBA"), _paste_alpha(strip, width, height, panel)
+        )
+        centre = panel // 2
+    else:
+        canvas.paste(photo, (0, 0))
+        strip = _fade(fade_width, height, panel_colour, towards_panel=False)
+        canvas = Image.alpha_composite(
+            canvas.convert("RGBA"),
+            _paste_alpha(strip, width, height, photo_width - fade_width),
+        )
+        centre = width - panel // 2
+
+    draw = ImageDraw.Draw(canvas)
+    y = (height - content) // 2
+
+    for line in lines:
+        if line:
+            draw.text(
+                (centre, y),
+                line,
+                font=quote_font,
+                fill=text_colour,
+                anchor="ma",
+            )
+        y += line_height
+
+    y += gap_name
+    draw.text((centre, y), f"- {author}", font=name_font, fill=text_colour, anchor="ma")
+    y += name_height
+
+    if handle:
+        y += gap_handle
+        draw.text((centre, y), f"@{handle}", font=handle_font, fill=muted, anchor="ma")
+
+    if watermark:
+        small = _load_font(SPLIT_TEXT_FONTS, 16 * scale)
+        stamp = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        ImageDraw.Draw(stamp).text(
+            (centre, height - 34 * scale),
+            watermark.upper(),
+            font=small,
+            fill=muted + (150,),
+            anchor="ms",
+        )
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), stamp)
+
+    output = canvas.convert("RGB").resize(
+        (SPLIT_WIDTH, height // scale), Image.Resampling.LANCZOS
+    )
+    buffer = io.BytesIO()
+    output.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def _paste_alpha(strip, width: int, height: int, x: int):
+    """Place a fade strip on its own full-size layer at ``x``."""
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    layer.paste(strip, (x, 0))
+    return layer

@@ -33,15 +33,19 @@ __red_end_user_data_statement__ = "This cog does not store any user data."
 
 FONTS = tuple(card.QUOTE_FONTS)
 THEMES = card.THEMES
+STYLES = card.STYLES
+SIDES = card.SIDES
 MAX_WATERMARK = 40
 AVATAR_TIMEOUT = aiohttp.ClientTimeout(total=10)
 AVATAR_BYTES = 4 * 1024 * 1024
+PHOTO_BYTES = 8 * 1024 * 1024
 
 USAGE = (
     "`[p]quote` - quote the message you replied to\n"
     "`[p]quote <message link or id>` - quote any message the bot can read\n\n"
-    "Options: `--light`, `--dark`, `--gray`, `--colour`, `--watermark`, "
-    "`--no-watermark`, `--font serif|sans|light|mono`, `--accent #5865f2`\n"
+    "Options: `--split`/`--gradient`, `--flip`, `--light`/`--dark`, "
+    "`--gray`/`--colour`, `--watermark`/`--no-watermark`, "
+    "`--font serif|sans|light|mono`, `--accent #5865f2`\n"
     "Right-click a message -> Apps -> **Quote** does the same."
 )
 
@@ -73,6 +77,8 @@ class Quoter(commands.Cog):
             self, identifier="quoter", force_registration=True
         )
         self.config.register_guild(
+            style="gradient",
+            side="left",
             font="serif",
             theme="dark",
             grayscale=False,
@@ -135,6 +141,8 @@ class Quoter(commands.Cog):
         link or ID of any message the bot can read.
 
         **Options**
+        `--split` / `--gradient` - photo-and-panel layout or avatar card
+        `--flip` - put the picture on the other side
         `--light` / `--dark` - card theme (overrides the server default)
         `--gray` / `--colour` - desaturated avatar and background
         `--watermark` / `--no-watermark` - stamp a small line at the bottom
@@ -156,7 +164,7 @@ class Quoter(commands.Cog):
 
         try:
             source = await self._resolve(ctx, target)
-            png = await self._compose(source, ctx.guild, options)
+            png = await self._compose(source, ctx.guild, options, invoking=ctx.message)
         except QuoteError as exc:
             await self._send_error(ctx, str(exc))
             return
@@ -197,6 +205,41 @@ class Quoter(commands.Cog):
             return
         await self.config.guild(ctx.guild).theme.set(theme)
         await ctx.send(f"Quote theme set to **{theme}**.")
+
+    @quote_set.command(name="style")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def quote_set_style(self, ctx: commands.Context, value: str) -> None:
+        """Pick the layout: `gradient` (avatar and quote) or `split` (photo and text panel)."""
+        style = value.strip().lower()
+        if style not in STYLES:
+            await self._send_error(
+                ctx, f"Unknown style `{style}` - pick `gradient` or `split`."
+            )
+            return
+        await self.config.guild(ctx.guild).style.set(style)
+        if style == "split":
+            await ctx.send(
+                "Cards now use the split layout: the picture from the quoted message "
+                "on one side, the text on a solid panel. Without a picture the card "
+                "falls back to the gradient look."
+            )
+        else:
+            await ctx.send("Cards use the gradient layout again.")
+
+    @quote_set.command(name="side")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def quote_set_side(self, ctx: commands.Context, value: str) -> None:
+        """Put the picture of a split card on the `left` or the `right`."""
+        side = value.strip().lower()
+        if side not in SIDES:
+            await self._send_error(
+                ctx, f"Unknown side `{side}` - pick `left` or `right`."
+            )
+            return
+        await self.config.guild(ctx.guild).side.set(side)
+        await ctx.send(f"Split cards put the picture on the **{side}**.")
 
     @quote_set.command(name="grayscale")
     @commands.guild_only()
@@ -371,6 +414,7 @@ class Quoter(commands.Cog):
         message: discord.Message,
         guild: Optional[discord.Guild],
         options: Dict[str, Any],
+        invoking: Optional[discord.Message] = None,
     ) -> bytes:
         text = card.clean_message(message.content, resolver=self._resolver(guild))
         if not text:
@@ -391,30 +435,57 @@ class Quoter(commands.Cog):
         else:
             watermark_on = bool(settings["watermark"])
         accent = options.get("accent") or settings["accent"]
+        style = options.get("style") or settings["style"]
+        side = options.get("side") or settings["side"]
+        if side == "flip":
+            side = "right" if settings["side"] == "left" else "left"
 
         watermark = None
         if watermark_on:
             watermark = settings["watermark_text"] or self._bot_name(guild)
 
-        avatar = await self._avatar(message.author)
-        author = message.author.display_name
+        photo = None
+        if style == "split":
+            photo = await self._photo(message, invoking)
+            if photo is None:
+                if "style" in options:
+                    raise QuoteError(
+                        "The split style needs a picture: attach an image to your "
+                        "message, or quote a message that has one (an attachment or "
+                        "an embed image)."
+                    )
+                style = "gradient"
+
+        if style == "split" and photo is not None:
+            draw = functools.partial(
+                card.render_split,
+                text=text,
+                author=message.author.display_name,
+                handle=message.author.name,
+                image=photo,
+                theme=theme,
+                grayscale=grayscale,
+                watermark=watermark,
+                side=side,
+                font=options.get("font"),
+            )
+        else:
+            avatar = await self._avatar(message.author)
+            draw = functools.partial(
+                card.render,
+                text=text,
+                author=message.author.display_name,
+                avatar=avatar,
+                theme=theme,
+                font=font,
+                grayscale=grayscale,
+                watermark=watermark,
+                accent=accent,
+            )
 
         loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(
-                None,
-                functools.partial(
-                    card.render,
-                    text=text,
-                    author=author,
-                    avatar=avatar,
-                    theme=theme,
-                    font=font,
-                    grayscale=grayscale,
-                    watermark=watermark,
-                    accent=accent,
-                ),
-            )
+            return await loop.run_in_executor(None, draw)
         except Exception as exc:
             log.exception("Drawing a quote card failed")
             raise QuoteError(
@@ -422,21 +493,59 @@ class Quoter(commands.Cog):
             ) from exc
 
     async def _avatar(self, user: discord.abc.User) -> Optional[bytes]:
+        asset = user.display_avatar.replace(size=256, static_format="png")
+        return await self._download(asset.url, AVATAR_BYTES)
+
+    async def _photo(
+        self, message: discord.Message, invoking: Optional[discord.Message] = None
+    ) -> Optional[bytes]:
+        """First image of the quoted message, then of the command message."""
+        seen = []
+        for candidate in (message, invoking):
+            if candidate is None or candidate in seen:
+                continue
+            seen.append(candidate)
+            for attachment in getattr(candidate, "attachments", []) or []:
+                if not self._is_image(attachment):
+                    continue
+                if attachment.size and attachment.size > PHOTO_BYTES:
+                    continue
+                data = await self._download(attachment.url, PHOTO_BYTES)
+                if data:
+                    return data
+        for embed in getattr(message, "embeds", []) or []:
+            for asset in (embed.image, embed.thumbnail):
+                url = getattr(asset, "url", None)
+                if not url:
+                    continue
+                data = await self._download(url, PHOTO_BYTES)
+                if data:
+                    return data
+        return None
+
+    @staticmethod
+    def _is_image(attachment: Any) -> bool:
+        content_type = getattr(attachment, "content_type", None) or ""
+        if content_type.startswith("image/"):
+            return True
+        if content_type:
+            return False
+        name = (getattr(attachment, "filename", "") or "").lower()
+        return name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+
+    async def _download(self, url: str, limit: int) -> Optional[bytes]:
         try:
-            asset = user.display_avatar.replace(size=256, static_format="png")
-            async with self.session.get(asset.url) as response:
+            async with self.session.get(url) as response:
                 if response.status != 200:
-                    log.debug(
-                        "Avatar fetch returned %s for %s", response.status, user.id
-                    )
+                    log.debug("Fetching %s returned %s", url, response.status)
                     return None
-                if response.content_length and response.content_length > AVATAR_BYTES:
+                if response.content_length and response.content_length > limit:
                     return None
                 data = await response.read()
         except (aiohttp.ClientError, asyncio.TimeoutError):
-            log.debug("Avatar fetch failed for %s", user.id, exc_info=True)
+            log.debug("Fetching %s failed", url, exc_info=True)
             return None
-        return data if len(data) <= AVATAR_BYTES else None
+        return data if len(data) <= limit else None
 
     async def _deliver(
         self, ctx: commands.Context, source: discord.Message, png: bytes, *, reply: bool
@@ -458,6 +567,8 @@ class Quoter(commands.Cog):
     async def _settings(self, guild: Optional[discord.Guild]) -> Dict[str, Any]:
         if guild is None:
             return {
+                "style": "gradient",
+                "side": "left",
                 "font": "serif",
                 "theme": "dark",
                 "grayscale": False,
@@ -467,6 +578,10 @@ class Quoter(commands.Cog):
             }
         stored = await self.config.guild(guild).all()
         return {
+            "style": (
+                stored.get("style") if stored.get("style") in STYLES else "gradient"
+            ),
+            "side": stored.get("side") if stored.get("side") in SIDES else "left",
             "font": stored.get("font") if stored.get("font") in FONTS else "serif",
             "theme": stored.get("theme") if stored.get("theme") in THEMES else "dark",
             "grayscale": bool(stored.get("grayscale")),
@@ -510,6 +625,8 @@ class Quoter(commands.Cog):
             title="Quote cards",
             colour=await ctx.embed_color(),
             description=(
+                f"Style: **{settings['style']}**\n"
+                f"Picture side: **{settings['side']}**\n"
                 f"Font: **{settings['font']}**\n"
                 f"Theme: **{settings['theme']}**\n"
                 f"Grayscale: **{'on' if settings['grayscale'] else 'off'}**\n"
@@ -518,7 +635,10 @@ class Quoter(commands.Cog):
             ),
         )
         embed.set_footer(
-            text="quote set font | theme | grayscale | watermark | watermarktext | accent"
+            text=(
+                "quote set style | side | font | theme | grayscale | watermark "
+                "| watermarktext | accent"
+            )
         )
         await ctx.send(embed=embed)
 

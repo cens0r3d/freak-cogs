@@ -41,7 +41,7 @@ running bot and fixed by hand.
 | [dbd](deadbydaylight/README.md) | Dead by Daylight data: killers, survivors, perks, items, maps. |
 | [psychonaut](psychonaut/README.md) | PsychonautWiki reference: substance class, doses, duration, effects. |
 | [fakemessage](fakemessage/README.md) | Fake screenshots of Discord, WhatsApp, Telegram, Instagram, Snapchat, iMessage, YouTube, X, Facebook, Reddit, Twitch and Kick, with optional pictures. |
-| [quoter](quoter/README.md) | Turns a message into an inspirational quote card (`[p]quote`, alias `[p]quoter`), from a reply, a link or the message menu. |
+| [quoter](quoter/README.md) | Turns a message into a quote card (`[p]quote`, alias `[p]quoter`) - gradient/avatar or photo-and-text split - from a reply, a link or the message menu. |
 | [diskinfo](diskinfo/README.md) | Disk usage of the bot's host: an embed with bars, plus an optional PNG chart. |
 
 Every cog folder has its own README with the full command list, setup steps and troubleshooting.
